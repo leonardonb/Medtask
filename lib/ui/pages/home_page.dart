@@ -31,10 +31,10 @@ class _HomePageState extends State<HomePage> {
   }
 
   String _countdown(Medication m, MedListViewModel vm) {
-    final next = vm.nextPlanned(m);
+    final next = vm.nextGrid(m); // <<< grade pura, sem folga
     final diff = next.difference(DateTime.now());
-    if (diff.isNegative) return 'Atrasado';
     String two(int n) => n.toString().padLeft(2, '0');
+    if (diff.isNegative) return '00:00:00';
     final h = diff.inHours;
     final mm = diff.inMinutes % 60;
     final s = diff.inSeconds % 60;
@@ -85,7 +85,7 @@ class _HomePageState extends State<HomePage> {
           separatorBuilder: (_, __) => const Divider(height: 1),
           itemBuilder: (_, i) {
             final m = vm.meds[i];
-            final next = vm.nextPlanned(m);
+            final next = vm.nextGrid(m); // <<< exibição pela grade
             String two(int n) => n.toString().padLeft(2, '0');
             final nextStr =
                 '${two(next.day)}/${two(next.month)}/${next.year} ${two(next.hour)}:${two(next.minute)}';
@@ -121,9 +121,7 @@ class _HomePageState extends State<HomePage> {
                           if (!mounted || when == null) return;
                           String two(int n) => n.toString().padLeft(2, '0');
                           final txt = 'Adiado para ${two(when.hour)}:${two(when.minute)}';
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(content: Text(txt)),
-                          );
+                          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(txt)));
                         },
                       ),
                       Switch(

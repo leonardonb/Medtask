@@ -16,20 +16,30 @@ class MedListViewModel extends GetxController {
     }
   }
 
-  DateTime nextPlanned(Medication m) {
-    final start = m.firstDose;
+  Duration get _grace => const Duration(seconds: 5);
+
+  /// Próxima ocorrência da **grade** (firstDose + n×intervalo), sempre > agora, sem folga
+  DateTime nextGrid(Medication m, {DateTime? now}) {
+    final t0 = m.firstDose;
     final stepMin = max(1, m.intervalMinutes);
     final step = Duration(minutes: stepMin);
-    final now = DateTime.now();
-    final grace = const Duration(seconds: 5);
+    final _now = now ?? DateTime.now();
 
-    if (start.isAfter(now)) return start;
+    if (t0.isAfter(_now)) return t0;
 
-    final elapsed = now.difference(start);
+    final elapsed = _now.difference(t0);
     final steps = (elapsed.inSeconds / step.inSeconds).ceil();
-    var next = start.add(step * steps);
-    if (next.isBefore(now)) next = now.add(grace);
+    var next = t0.add(step * steps);
+    if (!next.isAfter(_now)) next = next.add(step); // garante estritamente futuro
     return next;
+  }
+
+  /// Instante real para **agendar** (aplica folga mínima se estiver muito perto)
+  DateTime nextFireTime(Medication m, {DateTime? now}) {
+    final _now = now ?? DateTime.now();
+    var t = nextGrid(m, now: _now);
+    if (t.difference(_now) < _grace) t = _now.add(_grace);
+    return t;
   }
 
   int _baseIdFor(Medication m) => (m.id ?? 0) * 1000;
@@ -40,10 +50,10 @@ class MedListViewModel extends GetxController {
 
     await NotificationService.cancelSeries(_baseIdFor(m), _repeatCount());
 
-    final planned = nextPlanned(m);
+    final fireAt = nextFireTime(m);
     await NotificationService.scheduleSeries(
       baseId: _baseIdFor(m),
-      firstWhen: planned,
+      firstWhen: fireAt,
       title: 'Hora do remédio',
       body: m.name,
       repeatEvery: const Duration(minutes: 5),
@@ -59,11 +69,10 @@ class MedListViewModel extends GetxController {
     if (idx < 0) return;
     final m = meds[idx];
     await NotificationService.cancelSeries(_baseIdFor(m), _repeatCount());
-    await _scheduleFor(m);
+    await _scheduleFor(m); // mantém a grade original
   }
 
-  /// Adia apenas a série atual (não altera a grade de doses).
-  /// Retorna o horário do primeiro alerta da série adiada.
+  /// Adia só a série atual (não altera a grade). Retorna o primeiro disparo adiado.
   Future<DateTime?> postpone(int id, Duration d) async {
     final idx = meds.indexWhere((e) => e.id == id);
     if (idx < 0) return null;

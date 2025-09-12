@@ -1,12 +1,13 @@
 import 'package:get/get.dart';
+
 import '../models/medication.dart';
-import 'med_list_viewmodel.dart';
+import '../viewmodels/med_list_viewmodel.dart';
 
 class MedEditViewModel extends GetxController {
   final name = ''.obs;
-  final intervalHours = 8.obs;
-  final intervalMinutes = 0.obs;
-  final firstDoseAt = Rxn<DateTime>();
+  final intervalHours = 8.obs;        // default 8h
+  final intervalMinutes = 0.obs;      // +0 min
+  final firstDoseAt = Rxn<DateTime>(); // usuário escolhe; default no save()
   final sound = 'alert'.obs;
   final enabled = true.obs;
 
@@ -20,15 +21,21 @@ class MedEditViewModel extends GetxController {
   }
 
   Future<void> save({Medication? base}) async {
-    final totalMinutes = intervalHours.value * 60 + intervalMinutes.value;
+    final totalMinutes = (intervalHours.value * 60) + intervalMinutes.value;
+    final safeInterval = totalMinutes <= 0 ? 1 : totalMinutes;
+
+    final when = firstDoseAt.value ?? DateTime.now().add(const Duration(seconds: 5));
+
     final med = Medication(
       id: base?.id,
-      name: name.value.trim(),
-      firstDose: firstDoseAt.value ?? DateTime.now(),
-      intervalMinutes: totalMinutes,
+      name: name.value.trim().isEmpty ? 'Remédio' : name.value.trim(),
+      firstDose: when,
+      intervalMinutes: safeInterval,
       enabled: enabled.value,
       sound: sound.value.trim().isEmpty ? null : sound.value.trim(),
     );
-    await Get.find<MedListViewModel>().upsert(med);
+
+    final listVm = Get.find<MedListViewModel>();
+    await listVm.upsert(med);
   }
 }
