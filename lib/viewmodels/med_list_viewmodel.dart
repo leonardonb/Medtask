@@ -18,7 +18,6 @@ class MedListViewModel extends GetxController {
 
   Duration get _grace => const Duration(seconds: 5);
 
-  /// Próxima ocorrência da **grade** (firstDose + n×intervalo), sempre > agora, sem folga
   DateTime nextGrid(Medication m, {DateTime? now}) {
     final t0 = m.firstDose;
     final stepMin = max(1, m.intervalMinutes);
@@ -30,11 +29,10 @@ class MedListViewModel extends GetxController {
     final elapsed = _now.difference(t0);
     final steps = (elapsed.inSeconds / step.inSeconds).ceil();
     var next = t0.add(step * steps);
-    if (!next.isAfter(_now)) next = next.add(step); // garante estritamente futuro
+    if (!next.isAfter(_now)) next = next.add(step);
     return next;
   }
 
-  /// Instante real para **agendar** (aplica folga mínima se estiver muito perto)
   DateTime nextFireTime(Medication m, {DateTime? now}) {
     final _now = now ?? DateTime.now();
     var t = nextGrid(m, now: _now);
@@ -43,7 +41,7 @@ class MedListViewModel extends GetxController {
   }
 
   int _baseIdFor(Medication m) => (m.id ?? 0) * 1000;
-  int _repeatCount() => 12; // 1h repetindo a cada 5 min
+  int _repeatCount() => 12;
 
   Future<void> _scheduleFor(Medication m) async {
     if (m.id == null || !m.enabled) return;
@@ -56,7 +54,7 @@ class MedListViewModel extends GetxController {
       firstWhen: fireAt,
       title: 'Hora do remédio',
       body: m.name,
-      channelKey: NotificationService.channelKeyForSound(m.sound),
+      sound: m.sound, // <- ajustado
       repeatEvery: const Duration(minutes: 5),
       repeatCount: _repeatCount(),
       payload: 'med:${m.id}',
@@ -70,10 +68,9 @@ class MedListViewModel extends GetxController {
     if (idx < 0) return;
     final m = meds[idx];
     await NotificationService.cancelSeries(_baseIdFor(m), _repeatCount());
-    await _scheduleFor(m); // mantém a grade original
+    await _scheduleFor(m);
   }
 
-  /// Adia só a série atual (não altera a grade). Retorna o primeiro disparo adiado.
   Future<DateTime?> postpone(int id, Duration d) async {
     final idx = meds.indexWhere((e) => e.id == id);
     if (idx < 0) return null;
@@ -86,7 +83,7 @@ class MedListViewModel extends GetxController {
       firstWhen: first,
       title: 'Hora do remédio',
       body: m.name,
-      channelKey: NotificationService.channelKeyForSound(m.sound),
+      sound: m.sound, // <- ajustado
       repeatEvery: const Duration(minutes: 5),
       repeatCount: _repeatCount(),
       payload: 'med:${m.id}',

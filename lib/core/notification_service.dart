@@ -3,28 +3,33 @@ import 'package:awesome_notifications/awesome_notifications.dart';
 import 'package:android_intent_plus/android_intent.dart';
 
 class NotificationService {
-  static const _channelKey = 'meds_channel';
-  static const _channelName = 'Lembretes de Remédio';
-  static const _channelDesc = 'Alarmes e lembretes de doses';
+  static const String _baseChannelKey = 'meds_channel';
+  static const String _channelName = 'Lembretes de Remédio';
+  static const String _channelDesc = 'Alarmes e lembretes de doses';
+
   static String? _tz;
   static late String _defaultSound;
+  static final Set<String> _knownSounds = <String>{};
 
   static Future<void> init({
     String defaultRawSound = 'alert',
     List<String> otherRawSounds = const [],
+    bool debug = false,
   }) async {
-    _defaultSound = defaultRawSound;
+    _defaultSound = _sanitizeSound(defaultRawSound);
+    _knownSounds
+      ..clear()
+      ..add(_defaultSound)
+      ..addAll(otherRawSounds.map(_sanitizeSound));
+
     final channels = <NotificationChannel>[
-      _buildChannel(_channelKey, defaultRawSound),
-      ...otherRawSounds
+      _buildChannel(channelKeyForSound(null), _defaultSound),
+      ..._knownSounds
+          .where((s) => s != _defaultSound)
           .map((s) => _buildChannel(channelKeyForSound(s), s)),
     ];
 
-    await AwesomeNotifications().initialize(
-      null, // usa ícone do app
-      channels,
-      debug: false,
-    );
+    await AwesomeNotifications().initialize(null, channels, debug: debug);
 
     _tz = await AwesomeNotifications().getLocalTimeZoneIdentifier();
 
@@ -34,26 +39,44 @@ class NotificationService {
     }
   }
 
-  static NotificationChannel _buildChannel(String key, String sound) =>
-      NotificationChannel(
-        channelKey: key,
-        channelName: _channelName,
-        channelDescription: _channelDesc,
-        importance: NotificationImportance.Max,
-        playSound: true,
-        defaultRingtoneType: DefaultRingtoneType.Alarm,
-        soundSource: 'resource://raw/$sound',
-        enableVibration: true,
-        criticalAlerts: true,
-        channelShowBadge: true,
-      );
+  static Future<void> registerExtraSounds(List<String> sounds) async {
+    final newOnes = sounds
+        .map(_sanitizeSound)
+        .where((s) => !_knownSounds.contains(s) && s.isNotEmpty)
+        .toList();
+    if (newOnes.isEmpty) return;
+
+    for (final s in newOnes) {
+      await AwesomeNotifications().setChannel(_buildChannel(channelKeyForSound(s), s));
+      _knownSounds.add(s);
+    }
+  }
+
+  static NotificationChannel _buildChannel(String key, String sound) {
+    return NotificationChannel(
+      channelKey: key,
+      channelName: _channelName,
+      channelDescription: _channelDesc,
+      importance: NotificationImportance.Max,
+      playSound: true,
+      defaultRingtoneType: DefaultRingtoneType.Alarm,
+      soundSource: 'resource://raw/$sound',
+      enableVibration: true,
+      criticalAlerts: true,
+      channelShowBadge: true,
+    );
+  }
 
   static String channelKeyForSound(String? sound) {
-    if (sound == null || sound.isEmpty || sound == _defaultSound) {
-      return _channelKey;
+    final s = sound == null ? null : _sanitizeSound(sound);
+    if (s == null || s.isEmpty || !_knownSounds.contains(s) || s == _defaultSound) {
+      return _baseChannelKey;
     }
-    return '${_channelKey}_$sound';
+    return '$_baseChannelKey\_$s';
   }
+
+  static String _sanitizeSound(String raw) =>
+      raw.trim().toLowerCase().replaceAll(' ', '_');
 
   static Future<bool> areNotificationsEnabled() =>
       AwesomeNotifications().isNotificationAllowed();
@@ -69,22 +92,30 @@ class NotificationService {
 
   static Future<void> openBatteryOptimizationSettings() async {
     if (!Platform.isAndroid) return;
-    final intent = AndroidIntent(
+    const intent = AndroidIntent(
       action: 'android.settings.IGNORE_BATTERY_OPTIMIZATION_SETTINGS',
     );
     await intent.launch();
   }
 
-  // ---- imediata (teste rápido) ----
+  static Future<void> openExactAlarmSettings() async {
+    if (!Platform.isAndroid) return;
+    const intent = AndroidIntent(
+      action: 'android.settings.REQUEST_SCHEDULE_EXACT_ALARM',
+    );
+    await intent.launch();
+  }
+
   static Future<void> showNow({
     int id = 7777,
     String title = 'Lembrete',
     String body = 'Teste imediato',
+    String? sound,
   }) async {
     await AwesomeNotifications().createNotification(
       content: NotificationContent(
         id: id,
-        channelKey: _channelKey,
+        channelKey: channelKeyForSound(sound),
         title: title,
         body: body,
         category: NotificationCategory.Reminder,
@@ -94,29 +125,28 @@ class NotificationService {
     );
   }
 
-  // timers locais só para diagnóstico com app aberto
   static Future<void> timerIn10s() async =>
       Future.delayed(const Duration(seconds: 10),
               () => showNow(id: 7001, title: 'Timer +10s', body: 'Local timer'));
+
   static Future<void> timerExactIn15s() async =>
       Future.delayed(const Duration(seconds: 15),
               () => showNow(id: 7002, title: 'Timer +15s', body: 'Local timer'));
 
-  // ---- API de agendamento usada pela VM ----
   static Future<void> scheduleOne({
     required int id,
-    required DateTime when, // horário local
+    required DateTime when,
     required String title,
     required String body,
     String? payload,
-    String channelKey = _channelKey,
+    String? sound,
+    bool exactIfPossible = true,
   }) async {
-    // nunca agenda no passado
-    var w = when;
-    final now = DateTime.now();
-    if (!w.isAfter(now)) {
-      w = now.add(const Duration(seconds: 2));
-    }
+    final runAt = _safeFuture(when);
+    _tz ??= await AwesomeNotifications().getLocalTimeZoneIdentifier();
+
+    final channelKey = channelKeyForSound(sound);
+    final precise = exactIfPossible && await _canUseExactAlarm();
 
     await AwesomeNotifications().createNotification(
       content: NotificationContent(
@@ -130,30 +160,57 @@ class NotificationService {
         payload: payload == null ? null : {'p': payload},
       ),
       schedule: NotificationCalendar(
-        year: w.year,
-        month: w.month,
-        day: w.day,
-        hour: w.hour,
-        minute: w.minute,
-        second: w.second,
+        year: runAt.year,
+        month: runAt.month,
+        day: runAt.day,
+        hour: runAt.hour,
+        minute: runAt.minute,
+        second: runAt.second,
+        millisecond: 0,
         timeZone: _tz,
-        preciseAlarm: true,
+        preciseAlarm: precise,
         allowWhileIdle: true,
         repeats: false,
       ),
     );
   }
 
-  /// Agenda uma série (1h repetindo a cada 5 min, por padrão).
+  static Future<void> scheduleDaily({
+    required int id,
+    required int hour,
+    required int minute,
+    String title = 'Ei, olha a hora do remédio…',
+    String body = 'Cadê você? Lembra do remédio!!!',
+    String? payload,
+    String? sound,
+    bool exactIfPossible = true,
+  }) async {
+    final now = DateTime.now();
+    var first = DateTime(now.year, now.month, now.day, hour, minute);
+    if (!first.isAfter(now)) {
+      first = first.add(const Duration(days: 1));
+    }
+    await scheduleOne(
+      id: id,
+      when: first,
+      title: title,
+      body: body,
+      payload: payload,
+      sound: sound,
+      exactIfPossible: exactIfPossible,
+    );
+  }
+
   static Future<void> scheduleSeries({
     required int baseId,
     required DateTime firstWhen,
     required String title,
     required String body,
     String? payload,
-    String channelKey = _channelKey,
+    String? sound,
     Duration repeatEvery = const Duration(minutes: 5),
     int repeatCount = 12,
+    bool exactIfPossible = true,
   }) async {
     await cancelSeries(baseId, repeatCount);
     for (int i = 0; i <= repeatCount; i++) {
@@ -163,9 +220,10 @@ class NotificationService {
         title: title,
         body: body,
         payload: payload,
-        channelKey: channelKey,
+        sound: sound,
+        exactIfPossible: exactIfPossible,
       );
-      await Future.delayed(const Duration(milliseconds: 20)); // evita flood
+      await Future.delayed(const Duration(milliseconds: 25));
     }
   }
 
@@ -180,4 +238,14 @@ class NotificationService {
 
   static Future<void> cancelAll() =>
       AwesomeNotifications().cancelAll();
+
+  static Future<bool> _canUseExactAlarm() async {
+    if (!Platform.isAndroid) return false;
+    return true;
+  }
+
+  static DateTime _safeFuture(DateTime when) {
+    final now = DateTime.now();
+    return when.isAfter(now) ? when : now.add(const Duration(seconds: 2));
+  }
 }

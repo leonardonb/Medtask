@@ -13,6 +13,27 @@ Future<void> main() async {
   final listVm = Get.put(MedListViewModel(), permanent: true);
   await listVm.init();
 
+  // Agendamento de teste único para ~20s a partir de agora
+  await notif.NotificationService.scheduleOne(
+    id: 9001,
+    when: DateTime.now().add(const Duration(seconds: 20)),
+    title: 'Ei, olha a hora do remédio…',
+    body: 'Teste rápido: verifique se você recebe esta notificação.',
+    sound: 'alert',
+    exactIfPossible: true,
+  );
+
+  // Agendamento diário às 08:00
+  await notif.NotificationService.scheduleDaily(
+    id: 1001,
+    hour: 8,
+    minute: 0,
+    title: 'Ei, olha a hora do remédio…',
+    body: 'Cadê você? Lembra do remédio!!!',
+    sound: 'alert',
+    exactIfPossible: true,
+  );
+
   runApp(const MedApp());
 }
 
