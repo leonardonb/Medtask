@@ -7,24 +7,22 @@ class NotificationService {
   static const _channelName = 'Lembretes de Remédio';
   static const _channelDesc = 'Alarmes e lembretes de doses';
   static String? _tz;
+  static late String _defaultSound;
 
-  static Future<void> init({String defaultRawSound = 'alert'}) async {
+  static Future<void> init({
+    String defaultRawSound = 'alert',
+    List<String> otherRawSounds = const [],
+  }) async {
+    _defaultSound = defaultRawSound;
+    final channels = <NotificationChannel>[
+      _buildChannel(_channelKey, defaultRawSound),
+      ...otherRawSounds
+          .map((s) => _buildChannel(channelKeyForSound(s), s)),
+    ];
+
     await AwesomeNotifications().initialize(
       null, // usa ícone do app
-      [
-        NotificationChannel(
-          channelKey: _channelKey,
-          channelName: _channelName,
-          channelDescription: _channelDesc,
-          importance: NotificationImportance.Max,
-          playSound: true,
-          defaultRingtoneType: DefaultRingtoneType.Alarm,
-          soundSource: 'resource://raw/$defaultRawSound',
-          enableVibration: true,
-          criticalAlerts: true,
-          channelShowBadge: true,
-        ),
-      ],
+      channels,
       debug: false,
     );
 
@@ -34,6 +32,27 @@ class NotificationService {
     if (!allowed) {
       await AwesomeNotifications().requestPermissionToSendNotifications();
     }
+  }
+
+  static NotificationChannel _buildChannel(String key, String sound) =>
+      NotificationChannel(
+        channelKey: key,
+        channelName: _channelName,
+        channelDescription: _channelDesc,
+        importance: NotificationImportance.Max,
+        playSound: true,
+        defaultRingtoneType: DefaultRingtoneType.Alarm,
+        soundSource: 'resource://raw/$sound',
+        enableVibration: true,
+        criticalAlerts: true,
+        channelShowBadge: true,
+      );
+
+  static String channelKeyForSound(String? sound) {
+    if (sound == null || sound.isEmpty || sound == _defaultSound) {
+      return _channelKey;
+    }
+    return '${_channelKey}_$sound';
   }
 
   static Future<bool> areNotificationsEnabled() =>
@@ -90,7 +109,7 @@ class NotificationService {
     required String title,
     required String body,
     String? payload,
-    String? sound,
+    String channelKey = _channelKey,
   }) async {
     // nunca agenda no passado
     var w = when;
@@ -102,14 +121,13 @@ class NotificationService {
     await AwesomeNotifications().createNotification(
       content: NotificationContent(
         id: id,
-        channelKey: _channelKey,
+        channelKey: channelKey,
         title: title,
         body: body,
         category: NotificationCategory.Reminder,
         wakeUpScreen: true,
         autoDismissible: true,
         payload: payload == null ? null : {'p': payload},
-        soundSource: sound == null ? null : 'resource://raw/$sound',
       ),
       schedule: NotificationCalendar(
         year: w.year,
@@ -133,7 +151,7 @@ class NotificationService {
     required String title,
     required String body,
     String? payload,
-    String? sound,
+    String channelKey = _channelKey,
     Duration repeatEvery = const Duration(minutes: 5),
     int repeatCount = 12,
   }) async {
@@ -145,7 +163,7 @@ class NotificationService {
         title: title,
         body: body,
         payload: payload,
-        sound: sound,
+        channelKey: channelKey,
       );
       await Future.delayed(const Duration(milliseconds: 20)); // evita flood
     }
