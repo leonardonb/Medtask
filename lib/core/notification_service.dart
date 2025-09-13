@@ -90,6 +90,7 @@ class NotificationService {
     required String title,
     required String body,
     String? payload,
+    String? sound,
   }) async {
     // nunca agenda no passado
     var w = when;
@@ -108,6 +109,7 @@ class NotificationService {
         wakeUpScreen: true,
         autoDismissible: true,
         payload: payload == null ? null : {'p': payload},
+        soundSource: sound == null ? null : 'resource://raw/$sound',
       ),
       schedule: NotificationCalendar(
         year: w.year,
@@ -131,6 +133,7 @@ class NotificationService {
     required String title,
     required String body,
     String? payload,
+    String? sound,
     Duration repeatEvery = const Duration(minutes: 5),
     int repeatCount = 12,
   }) async {
@@ -142,6 +145,7 @@ class NotificationService {
         title: title,
         body: body,
         payload: payload,
+        sound: sound,
       );
       await Future.delayed(const Duration(milliseconds: 20)); // evita flood
     }
