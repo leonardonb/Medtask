@@ -81,7 +81,32 @@ class MedListViewModel extends GetxController {
     final idx = meds.indexWhere((e) => e.id == id);
     if (idx < 0) return;
     final m = meds[idx];
-    final updated = m.copyWith(firstDose: DateTime.now());
+    final base = nextGrid(m);
+    final updated = m.copyWith(firstDose: base);
+    meds[idx] = updated;
+    await _repo.update(updated);
+    await NotificationService.cancelSeries(_baseIdFor(updated), _repeatCount());
+    await _scheduleFor(updated);
+  }
+
+  Future<void> skipNext(int id) async {
+    final idx = meds.indexWhere((e) => e.id == id);
+    if (idx < 0) return;
+    final m = meds[idx];
+    final step = Duration(minutes: max(1, m.intervalMinutes));
+    final updated = m.copyWith(firstDose: m.firstDose.add(step));
+    meds[idx] = updated;
+    await _repo.update(updated);
+    await NotificationService.cancelSeries(_baseIdFor(updated), _repeatCount());
+    await _scheduleFor(updated);
+  }
+
+  Future<void> rewindPrevious(int id) async {
+    final idx = meds.indexWhere((e) => e.id == id);
+    if (idx < 0) return;
+    final m = meds[idx];
+    final step = Duration(minutes: max(1, m.intervalMinutes));
+    final updated = m.copyWith(firstDose: m.firstDose.subtract(step));
     meds[idx] = updated;
     await _repo.update(updated);
     await NotificationService.cancelSeries(_baseIdFor(updated), _repeatCount());

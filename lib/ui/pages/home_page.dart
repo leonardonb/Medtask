@@ -51,6 +51,17 @@ class _HomePageState extends State<HomePage> {
     return '${two(dt.day)}/${two(dt.month)}/${dt.year} ${two(dt.hour)}:${two(dt.minute)}';
   }
 
+  Future<void> _showSnackNext(int id, String prefix) async {
+    final vm = _vm;
+    final updated = vm.meds.firstWhereOrNull((e) => e.id == id);
+    if (updated == null) return;
+    final next = vm.nextGrid(updated);
+    String two(int n) => n.toString().padLeft(2, '0');
+    final txt = '$prefix ${two(next.hour)}:${two(next.minute)}';
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(txt)));
+  }
+
   @override
   Widget build(BuildContext context) {
     final vm = _vm;
@@ -139,51 +150,47 @@ class _HomePageState extends State<HomePage> {
                     const SizedBox(height: 12),
                     Row(
                       children: [
-                        FilledButton.icon(
-                          style: FilledButton.styleFrom(
-                            visualDensity: VisualDensity.compact,
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                        Expanded(
+                          child: FilledButton.icon(
+                            onPressed: m.id == null
+                                ? null
+                                : () async {
+                              await vm.markTaken(m.id!);
+                              await _showSnackNext(m.id!, 'Próximo às');
+                            },
+                            icon: const Icon(Icons.check, size: 18),
+                            label: const Text('Tomei agora'),
                           ),
-                          onPressed: m.id == null ? null : () => vm.markTaken(m.id!),
-                          icon: const Icon(Icons.check, size: 18),
-                          label: const Text('Tomei agora'),
                         ),
                         const SizedBox(width: 8),
-                        OutlinedButton.icon(
-                          style: OutlinedButton.styleFrom(
-                            visualDensity: VisualDensity.compact,
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            onPressed: m.id == null
+                                ? null
+                                : () async {
+                              await vm.rewindPrevious(m.id!);
+                              await _showSnackNext(m.id!, 'Reagendado para');
+                              if (!mounted) return;
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(content: Text('Marcado como atrasado')),
+                              );
+                            },
+                            icon: const Icon(Icons.schedule, size: 18),
+                            label: const Text('Adiar'),
                           ),
-                          onPressed: m.id == null
-                              ? null
-                              : () async {
-                            final d = await showModalBottomSheet<Duration>(
-                              context: context,
-                              showDragHandle: true,
-                              builder: (ctx) => _PostponeSheet(),
-                            );
-                            if (d == null) return;
-                            final when = await vm.postpone(m.id!, d);
-                            if (!mounted || when == null) return;
-                            String two(int n) => n.toString().padLeft(2, '0');
-                            final txt = 'Adiado para ${two(when.hour)}:${two(when.minute)}';
-                            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(txt)));
-                          },
-                          icon: const Icon(Icons.schedule_send, size: 18),
-                          label: const Text('Adiar'),
                         ),
                         const SizedBox(width: 8),
-                        OutlinedButton.icon(
-                          style: OutlinedButton.styleFrom(
-                            visualDensity: VisualDensity.compact,
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            onPressed: m.id == null
+                                ? null
+                                : () async {
+                              await vm.skipNext(m.id!);
+                              await _showSnackNext(m.id!, 'Pulou para');
+                            },
+                            icon: const Icon(Icons.skip_next, size: 18),
+                            label: const Text('Pular'),
                           ),
-                          onPressed: m.id == null ? null : () => vm.toggleEnabled(m.id!, !m.enabled),
-                          icon: Icon(
-                            m.enabled ? Icons.notifications_active : Icons.notifications_off,
-                            size: 18,
-                          ),
-                          label: Text(m.enabled ? 'Desativar' : 'Ativar'),
                         ),
                       ],
                     ),
@@ -191,29 +198,43 @@ class _HomePageState extends State<HomePage> {
                     Row(
                       children: [
                         Expanded(
-                          child: Align(
-                            alignment: Alignment.centerLeft,
-                            child: OutlinedButton.icon(
-                              style: OutlinedButton.styleFrom(
-                                visualDensity: VisualDensity.compact,
-                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                              ),
-                              onPressed: () => Get.to(() => EditMedPage(existing: m)),
-                              icon: const Icon(Icons.edit, size: 18),
-                              label: const Text('Editar'),
-                            ),
+                          child: OutlinedButton.icon(
+                            onPressed: () => Get.to(() => EditMedPage(existing: m)),
+                            icon: const Icon(Icons.edit, size: 18),
+                            label: const Text('Editar'),
                           ),
                         ),
-                        Align(
-                          alignment: Alignment.centerRight,
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            onPressed: m.id == null
+                                ? null
+                                : () async {
+                              await vm.toggleEnabled(m.id!, !m.enabled);
+                              final msg = m.enabled ? 'Notificações OFF' : 'Notificações ON';
+                              if (!mounted) return;
+                              ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+                            },
+                            icon: Icon(m.enabled ? Icons.notifications_active : Icons.notifications_off, size: 18),
+                            label: Text(m.enabled ? 'ON' : 'OFF'),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
                           child: OutlinedButton.icon(
                             style: OutlinedButton.styleFrom(
-                              visualDensity: VisualDensity.compact,
-                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
                               foregroundColor: Theme.of(context).colorScheme.error,
                               side: BorderSide(color: Theme.of(context).colorScheme.error),
                             ),
-                            onPressed: m.id == null ? null : () => vm.remove(m.id!),
+                            onPressed: m.id == null
+                                ? null
+                                : () async {
+                              await vm.remove(m.id!);
+                              if (!mounted) return;
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(content: Text('Remédio excluído')),
+                              );
+                            },
                             icon: const Icon(Icons.delete_outline, size: 18),
                             label: const Text('Excluir'),
                           ),
@@ -232,51 +253,6 @@ class _HomePageState extends State<HomePage> {
         icon: const Icon(Icons.add),
         label: const Text('Adicionar'),
       ),
-    );
-  }
-}
-
-class _PostponeSheet extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) {
-    return SafeArea(
-      minimum: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const SizedBox(height: 6),
-          Text('Adiar lembrete', style: Theme.of(context).textTheme.titleMedium),
-          const SizedBox(height: 12),
-          Wrap(
-            spacing: 10,
-            runSpacing: 10,
-            children: const [
-              _DelayChip(label: '+1 min', duration: Duration(minutes: 1)),
-              _DelayChip(label: '+5 min', duration: Duration(minutes: 5)),
-              _DelayChip(label: '+10 min', duration: Duration(minutes: 10)),
-              _DelayChip(label: '+30 min', duration: Duration(minutes: 30)),
-              _DelayChip(label: '+1 h', duration: Duration(hours: 1)),
-              _DelayChip(label: '+2 h', duration: Duration(hours: 2)),
-            ],
-          ),
-          const SizedBox(height: 12),
-        ],
-      ),
-    );
-  }
-}
-
-class _DelayChip extends StatelessWidget {
-  final String label;
-  final Duration duration;
-  const _DelayChip({required this.label, required this.duration});
-
-  @override
-  Widget build(BuildContext context) {
-    return ActionChip(
-      label: Text(label),
-      avatar: const Icon(Icons.schedule, size: 18),
-      onPressed: () => Navigator.of(context).pop(duration),
     );
   }
 }
