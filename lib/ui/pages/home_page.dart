@@ -140,14 +140,49 @@ class _HomePageState extends State<HomePage> {
                     Row(
                       children: [
                         FilledButton.icon(
+                          style: FilledButton.styleFrom(
+                            visualDensity: VisualDensity.compact,
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                          ),
                           onPressed: m.id == null ? null : () => vm.markTaken(m.id!),
-                          icon: const Icon(Icons.check),
+                          icon: const Icon(Icons.check, size: 18),
                           label: const Text('Tomei agora'),
                         ),
-                        const SizedBox(width: 10),
+                        const SizedBox(width: 8),
                         OutlinedButton.icon(
+                          style: OutlinedButton.styleFrom(
+                            visualDensity: VisualDensity.compact,
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                          ),
+                          onPressed: m.id == null
+                              ? null
+                              : () async {
+                            final d = await showModalBottomSheet<Duration>(
+                              context: context,
+                              showDragHandle: true,
+                              builder: (ctx) => _PostponeSheet(),
+                            );
+                            if (d == null) return;
+                            final when = await vm.postpone(m.id!, d);
+                            if (!mounted || when == null) return;
+                            String two(int n) => n.toString().padLeft(2, '0');
+                            final txt = 'Adiado para ${two(when.hour)}:${two(when.minute)}';
+                            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(txt)));
+                          },
+                          icon: const Icon(Icons.schedule_send, size: 18),
+                          label: const Text('Adiar'),
+                        ),
+                        const SizedBox(width: 8),
+                        OutlinedButton.icon(
+                          style: OutlinedButton.styleFrom(
+                            visualDensity: VisualDensity.compact,
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                          ),
                           onPressed: m.id == null ? null : () => vm.toggleEnabled(m.id!, !m.enabled),
-                          icon: Icon(m.enabled ? Icons.notifications_active : Icons.notifications_off),
+                          icon: Icon(
+                            m.enabled ? Icons.notifications_active : Icons.notifications_off,
+                            size: 18,
+                          ),
                           label: Text(m.enabled ? 'Desativar' : 'Ativar'),
                         ),
                       ],
@@ -158,47 +193,29 @@ class _HomePageState extends State<HomePage> {
                         Expanded(
                           child: Align(
                             alignment: Alignment.centerLeft,
-                            child: Wrap(
-                              spacing: 10,
-                              children: [
-                                OutlinedButton.icon(
-                                  onPressed: m.id == null
-                                      ? null
-                                      : () async {
-                                    final d = await showModalBottomSheet<Duration>(
-                                      context: context,
-                                      showDragHandle: true,
-                                      builder: (ctx) => _PostponeSheet(),
-                                    );
-                                    if (d == null) return;
-                                    final when = await vm.postpone(m.id!, d);
-                                    if (!mounted || when == null) return;
-                                    String two(int n) => n.toString().padLeft(2, '0');
-                                    final txt = 'Adiado para ${two(when.hour)}:${two(when.minute)}';
-                                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(txt)));
-                                  },
-                                  icon: const Icon(Icons.schedule_send),
-                                  label: const Text('Adiar'),
-                                ),
-                                OutlinedButton.icon(
-                                  onPressed: () => Get.to(() => EditMedPage(existing: m)),
-                                  icon: const Icon(Icons.edit),
-                                  label: const Text('Editar'),
-                                ),
-                              ],
+                            child: OutlinedButton.icon(
+                              style: OutlinedButton.styleFrom(
+                                visualDensity: VisualDensity.compact,
+                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                              ),
+                              onPressed: () => Get.to(() => EditMedPage(existing: m)),
+                              icon: const Icon(Icons.edit, size: 18),
+                              label: const Text('Editar'),
                             ),
                           ),
                         ),
                         Align(
                           alignment: Alignment.centerRight,
                           child: OutlinedButton.icon(
-                            onPressed: m.id == null ? null : () => vm.remove(m.id!),
-                            icon: const Icon(Icons.delete_outline),
-                            label: const Text('Excluir'),
                             style: OutlinedButton.styleFrom(
+                              visualDensity: VisualDensity.compact,
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
                               foregroundColor: Theme.of(context).colorScheme.error,
                               side: BorderSide(color: Theme.of(context).colorScheme.error),
                             ),
+                            onPressed: m.id == null ? null : () => vm.remove(m.id!),
+                            icon: const Icon(Icons.delete_outline, size: 18),
+                            label: const Text('Excluir'),
                           ),
                         ),
                       ],
