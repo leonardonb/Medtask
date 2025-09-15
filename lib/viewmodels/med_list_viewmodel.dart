@@ -23,9 +23,7 @@ class MedListViewModel extends GetxController {
     final stepMin = max(1, m.intervalMinutes);
     final step = Duration(minutes: stepMin);
     final _now = now ?? DateTime.now();
-
     if (t0.isAfter(_now)) return t0;
-
     final elapsed = _now.difference(t0);
     final steps = (elapsed.inSeconds / step.inSeconds).ceil();
     var next = t0.add(step * steps);
@@ -45,21 +43,37 @@ class MedListViewModel extends GetxController {
 
   Future<void> _scheduleFor(Medication m) async {
     if (m.id == null || !m.enabled) return;
-
     await NotificationService.cancelSeries(_baseIdFor(m), _repeatCount());
-
     final fireAt = nextFireTime(m);
     await NotificationService.scheduleSeries(
       baseId: _baseIdFor(m),
       firstWhen: fireAt,
       title: 'Hora do remédio',
       body: m.name,
-      sound: m.sound, // <- ajustado
+      sound: m.sound,
       repeatEvery: const Duration(minutes: 5),
       repeatCount: _repeatCount(),
       payload: 'med:${m.id}',
     );
+    meds.refresh();
+  }
 
+  Future<void> rescheduleAllAfterSoundChange() async {
+    for (final m in meds) {
+      if (m.id == null || !m.enabled) continue;
+      await NotificationService.cancelSeries(_baseIdFor(m), _repeatCount());
+      final fireAt = nextFireTime(m);
+      await NotificationService.scheduleSeries(
+        baseId: _baseIdFor(m),
+        firstWhen: fireAt,
+        title: 'Hora do remédio',
+        body: m.name,
+        sound: m.sound,
+        repeatEvery: const Duration(minutes: 5),
+        repeatCount: _repeatCount(),
+        payload: 'med:${m.id}',
+      );
+    }
     meds.refresh();
   }
 
@@ -75,7 +89,6 @@ class MedListViewModel extends GetxController {
     final idx = meds.indexWhere((e) => e.id == id);
     if (idx < 0) return null;
     final m = meds[idx];
-
     await NotificationService.cancelSeries(_baseIdFor(m), _repeatCount());
     final first = DateTime.now().add(d);
     await NotificationService.scheduleSeries(
@@ -83,7 +96,7 @@ class MedListViewModel extends GetxController {
       firstWhen: first,
       title: 'Hora do remédio',
       body: m.name,
-      sound: m.sound, // <- ajustado
+      sound: m.sound,
       repeatEvery: const Duration(minutes: 5),
       repeatCount: _repeatCount(),
       payload: 'med:${m.id}',
@@ -99,7 +112,6 @@ class MedListViewModel extends GetxController {
     final updated = m.copyWith(enabled: enabled);
     meds[idx] = updated;
     await _repo.update(updated);
-
     if (!enabled) {
       await NotificationService.cancelSeries(_baseIdFor(updated), _repeatCount());
     } else {

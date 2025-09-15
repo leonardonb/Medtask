@@ -1,9 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
-
-import '../../viewmodels/med_edit_viewmodel.dart';
 import '../../models/medication.dart';
-import '../../utils/dt.dart';
+import '../../viewmodels/med_list_viewmodel.dart';
 
 class EditMedPage extends StatefulWidget {
   final Medication? existing;
@@ -14,140 +12,187 @@ class EditMedPage extends StatefulWidget {
 }
 
 class _EditMedPageState extends State<EditMedPage> {
-  final _form = GlobalKey<FormState>();
-  late final MedEditViewModel vm;
-
-  final _name = TextEditingController();
-  final _h = TextEditingController(text: '8');
-  final _m = TextEditingController(text: '0');
-  final _sound = TextEditingController(text: 'alert');
-  bool _enabled = true;
+  final _formKey = GlobalKey<FormState>();
+  late final TextEditingController _nameCtrl;
+  late final TextEditingController _hoursCtrl;
+  late final TextEditingController _minsCtrl;
+  late DateTime _date;
+  late TimeOfDay _time;
+  late bool _enabled;
 
   @override
   void initState() {
     super.initState();
-    vm = Get.put(MedEditViewModel());
-    final e = widget.existing;
-    if (e != null) {
-      vm.loadFrom(e);
-      _name.text = e.name;
-      _h.text = (e.intervalMinutes ~/ 60).toString();
-      _m.text = (e.intervalMinutes % 60).toString();
-      _sound.text = e.sound ?? 'alert';
-      _enabled = e.enabled;
-    }
+    final now = DateTime.now().add(const Duration(minutes: 1));
+    final m = widget.existing;
+    _nameCtrl = TextEditingController(text: m?.name ?? '');
+    final totalMin = m?.intervalMinutes ?? 480;
+    final h = totalMin ~/ 60;
+    final mi = totalMin % 60;
+    _hoursCtrl = TextEditingController(text: h.toString());
+    _minsCtrl = TextEditingController(text: mi.toString());
+    final first = m?.firstDose ?? now;
+    _date = DateTime(first.year, first.month, first.day);
+    _time = TimeOfDay(hour: first.hour, minute: first.minute);
+    _enabled = m?.enabled ?? true;
   }
 
   @override
   void dispose() {
-    Get.delete<MedEditViewModel>();
+    _nameCtrl.dispose();
+    _hoursCtrl.dispose();
+    _minsCtrl.dispose();
     super.dispose();
   }
 
-  Future<void> _pickFirstDose() async {
-    final now = DateTime.now();
-    final d = await showDatePicker(
+  Future<void> _pickDate() async {
+    final picked = await showDatePicker(
       context: context,
-      initialDate: vm.firstDoseAt.value ?? now,
-      firstDate: now.subtract(const Duration(days: 365)),
-      lastDate: now.add(const Duration(days: 365 * 5)),
+      initialDate: _date,
+      firstDate: DateTime.now().subtract(const Duration(days: 1)),
+      lastDate: DateTime.now().add(const Duration(days: 365 * 5)),
     );
-    if (d == null) return;
-    final t = await showTimePicker(
+    if (picked != null) setState(() => _date = picked);
+  }
+
+  Future<void> _pickTime() async {
+    final picked = await showTimePicker(
       context: context,
-      initialTime: TimeOfDay.fromDateTime(vm.firstDoseAt.value ?? now),
+      initialTime: _time,
     );
-    if (t == null) return;
-    vm.firstDoseAt.value = DateTime(d.year, d.month, d.day, t.hour, t.minute);
-    setState(() {});
+    if (picked != null) setState(() => _time = picked);
+  }
+
+  DateTime _combine(DateTime d, TimeOfDay t) {
+    return DateTime(d.year, d.month, d.day, t.hour, t.minute);
+  }
+
+  Future<void> _save() async {
+    if (!_formKey.currentState!.validate()) return;
+    final vm = Get.find<MedListViewModel>();
+    final when = _combine(_date, _time);
+    final h = int.parse(_hoursCtrl.text);
+    final mi = int.parse(_minsCtrl.text);
+    final minutes = h * 60 + mi;
+    final current = widget.existing;
+
+    final med = current == null
+        ? Medication(
+      id: null,
+      name: _nameCtrl.text.trim(),
+      firstDose: when,
+      intervalMinutes: minutes,
+      enabled: _enabled,
+      sound: 'alert',
+    )
+        : current.copyWith(
+      name: _nameCtrl.text.trim(),
+      firstDose: when,
+      intervalMinutes: minutes,
+      enabled: _enabled,
+    );
+
+    await vm.upsert(med);
+    if (!mounted) return;
+    Navigator.of(context).pop();
   }
 
   @override
   Widget build(BuildContext context) {
-    final firstLabel = vm.firstDoseAt.value == null
-        ? 'Definir'
-        : dtFmt(vm.firstDoseAt.value!);
+    final isEdit = widget.existing != null;
+    final two = (int n) => n.toString().padLeft(2, '0');
+    final dateStr = '${two(_date.day)}/${two(_date.month)}/${_date.year}';
+    final timeStr = '${two(_time.hour)}:${two(_time.minute)}';
 
     return Scaffold(
-      appBar: AppBar(title: Text(widget.existing == null ? 'Novo' : 'Editar')),
-      body: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Form(
-          key: _form,
-          child: ListView(
-            children: [
-              TextFormField(
-                controller: _name,
-                decoration: const InputDecoration(labelText: 'Nome do remédio'),
-                validator: (v) => (v == null || v.trim().isEmpty) ? 'Obrigatório' : null,
-                onChanged: (v) => vm.name.value = v,
-              ),
-              Row(
-                children: [
-                  Expanded(
-                    child: TextFormField(
-                      controller: _h,
-                      decoration: const InputDecoration(labelText: 'Horas'),
-                      keyboardType: TextInputType.number,
-                      validator: (v) {
-                        final n = int.tryParse(v ?? '');
-                        if (n == null || n < 0) return '>= 0';
-                        return null;
-                      },
-                      onChanged: (v) => vm.intervalHours.value = int.tryParse(v) ?? 0,
+      appBar: AppBar(
+        title: Text(isEdit ? 'Editar Remédio' : 'Novo Remédio'),
+        actions: [
+          TextButton(
+            onPressed: _save,
+            child: const Text('Salvar'),
+          )
+        ],
+      ),
+      body: Form(
+        key: _formKey,
+        child: ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            TextFormField(
+              controller: _nameCtrl,
+              decoration: const InputDecoration(labelText: 'Nome do remédio'),
+              textInputAction: TextInputAction.next,
+              validator: (v) => (v == null || v.trim().isEmpty) ? 'Informe o nome' : null,
+            ),
+            const SizedBox(height: 16),
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Data da primeira dose'),
+              subtitle: Text(dateStr),
+              trailing: const Icon(Icons.calendar_today),
+              onTap: _pickDate,
+            ),
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Hora da primeira dose'),
+              subtitle: Text(timeStr),
+              trailing: const Icon(Icons.access_time),
+              onTap: _pickTime,
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Expanded(
+                  child: TextFormField(
+                    controller: _hoursCtrl,
+                    decoration: const InputDecoration(
+                      labelText: 'Intervalo (horas)',
+                      hintText: 'Ex.: 8',
                     ),
+                    keyboardType: TextInputType.number,
+                    validator: (v) {
+                      if (v == null || v.isEmpty) return 'Informe as horas';
+                      final n = int.tryParse(v);
+                      if (n == null || n < 0) return 'Horas inválidas';
+                      return null;
+                    },
                   ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: TextFormField(
-                      controller: _m,
-                      decoration: const InputDecoration(labelText: 'Minutos'),
-                      keyboardType: TextInputType.number,
-                      validator: (v) {
-                        final n = int.tryParse(v ?? '');
-                        if (n == null || n < 0 || n > 59) return '0..59';
-                        return null;
-                      },
-                      onChanged: (v) => vm.intervalMinutes.value = int.tryParse(v) ?? 0,
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 8),
-              ListTile(
-                contentPadding: EdgeInsets.zero,
-                title: const Text('Primeira dose'),
-                subtitle: Text(firstLabel),
-                trailing: OutlinedButton(
-                  onPressed: _pickFirstDose,
-                  child: const Text('Escolher'),
                 ),
-              ),
-              TextFormField(
-                controller: _sound,
-                decoration: const InputDecoration(labelText: 'Som (raw, ex.: alert)'),
-                onChanged: (v) => vm.sound.value = v,
-              ),
-              SwitchListTile(
-                title: const Text('Ativo'),
-                value: _enabled,
-                onChanged: (v) {
-                  setState(() => _enabled = v);
-                  vm.enabled.value = v;
-                },
-              ),
-              const SizedBox(height: 16),
-              FilledButton(
-                onPressed: () async {
-                  if (!_form.currentState!.validate()) return;
-                  FocusScope.of(context).unfocus();
-                  await vm.save(base: widget.existing);
-                  if (mounted) Get.back(result: true);
-                },
-                child: const Text('Salvar'),
-              ),
-            ],
-          ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: TextFormField(
+                    controller: _minsCtrl,
+                    decoration: const InputDecoration(
+                      labelText: 'Intervalo (minutos)',
+                      hintText: '0–59',
+                    ),
+                    keyboardType: TextInputType.number,
+                    validator: (v) {
+                      if (v == null || v.isEmpty) return 'Informe os minutos';
+                      final n = int.tryParse(v);
+                      if (n == null || n < 0 || n > 59) return 'Minutos inválidos';
+                      final h = int.tryParse(_hoursCtrl.text) ?? 0;
+                      if (h == 0 && n == 0) return 'Intervalo não pode ser 0';
+                      return null;
+                    },
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            SwitchListTile(
+              value: _enabled,
+              onChanged: (v) => setState(() => _enabled = v),
+              title: const Text('Ativo'),
+            ),
+            const SizedBox(height: 24),
+            FilledButton.icon(
+              onPressed: _save,
+              icon: const Icon(Icons.check),
+              label: Text(isEdit ? 'Salvar alterações' : 'Adicionar'),
+            ),
+          ],
         ),
       ),
     );

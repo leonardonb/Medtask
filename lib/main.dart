@@ -1,52 +1,35 @@
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
-
-import 'ui/pages/home_page.dart' as pages;
-import 'viewmodels/med_list_viewmodel.dart';
 import 'core/notification_service.dart' as notif;
+import 'ui/pages/home_page.dart';
+import 'features/settings/settings_page.dart';
+import 'core/app_settings_controller.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-
-  await notif.NotificationService.init(defaultRawSound: 'alert');
-
-  final listVm = Get.put(MedListViewModel(), permanent: true);
-  await listVm.init();
-
-  // Agendamento de teste único para ~20s a partir de agora
-  await notif.NotificationService.scheduleOne(
-    id: 9001,
-    when: DateTime.now().add(const Duration(seconds: 20)),
-    title: 'Ei, olha a hora do remédio…',
-    body: 'Teste rápido: verifique se você recebe esta notificação.',
-    sound: 'alert',
-    exactIfPossible: true,
-  );
-
-  // Agendamento diário às 08:00
-  await notif.NotificationService.scheduleDaily(
-    id: 1001,
-    hour: 8,
-    minute: 0,
-    title: 'Ei, olha a hora do remédio…',
-    body: 'Cadê você? Lembra do remédio!!!',
-    sound: 'alert',
-    exactIfPossible: true,
-  );
-
+  await notif.NotificationService.init();
+  final app = Get.put(AppSettingsController(), permanent: true);
+  await app.init();
   runApp(const MedApp());
 }
 
 class MedApp extends StatelessWidget {
   const MedApp({super.key});
-
   @override
   Widget build(BuildContext context) {
-    return GetMaterialApp(
-      title: 'Remédios',
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData(useMaterial3: true, colorSchemeSeed: Colors.teal),
-      home: const pages.HomePage(),
-    );
+    final app = Get.find<AppSettingsController>();
+    return Obx(() {
+      return GetMaterialApp(
+        debugShowCheckedModeBanner: false,
+        title: 'MedTask',
+        theme: ThemeData(useMaterial3: true, colorSchemeSeed: Colors.teal, brightness: Brightness.light),
+        darkTheme: ThemeData(useMaterial3: true, colorSchemeSeed: Colors.teal, brightness: Brightness.dark),
+        themeMode: app.themeMode.value,
+        getPages: [
+          GetPage(name: '/settings', page: () => const SettingsPage()),
+        ],
+        home: const HomePage(),
+      );
+    });
   }
 }
