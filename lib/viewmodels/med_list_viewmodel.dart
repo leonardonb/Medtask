@@ -19,23 +19,14 @@ class MedListViewModel extends GetxController {
   Duration get _grace => const Duration(seconds: 5);
 
   DateTime nextGrid(Medication m, {DateTime? now}) {
-    final t0 = m.firstDose;
-    final stepMin = max(1, m.intervalMinutes);
-    final step = Duration(minutes: stepMin);
-    final _now = now ?? DateTime.now();
-    if (t0.isAfter(_now)) return t0;
-    final elapsed = _now.difference(t0);
-    final steps = (elapsed.inSeconds / step.inSeconds).ceil();
-    var next = t0.add(step * steps);
-    if (!next.isAfter(_now)) next = next.add(step);
-    return next;
+    return m.firstDose;
   }
 
   DateTime nextFireTime(Medication m, {DateTime? now}) {
     final _now = now ?? DateTime.now();
-    var t = nextGrid(m, now: _now);
-    if (t.difference(_now) < _grace) t = _now.add(_grace);
-    return t;
+    final target = m.firstDose;
+    if (target.isAfter(_now.add(_grace))) return target;
+    return _now.add(_grace);
   }
 
   int _baseIdFor(Medication m) => (m.id ?? 0) * 1000;
@@ -77,15 +68,15 @@ class MedListViewModel extends GetxController {
     meds.refresh();
   }
 
+  Duration _stepFor(Medication m) => Duration(minutes: max(1, m.intervalMinutes));
+
   Future<void> markTaken(int id) async {
     final idx = meds.indexWhere((e) => e.id == id);
     if (idx < 0) return;
     final m = meds[idx];
-    final base = nextGrid(m);
-    final updated = m.copyWith(firstDose: base);
+    final updated = m.copyWith(firstDose: m.firstDose.add(_stepFor(m)));
     meds[idx] = updated;
     await _repo.update(updated);
-    await NotificationService.cancelSeries(_baseIdFor(updated), _repeatCount());
     await _scheduleFor(updated);
   }
 
@@ -93,11 +84,9 @@ class MedListViewModel extends GetxController {
     final idx = meds.indexWhere((e) => e.id == id);
     if (idx < 0) return;
     final m = meds[idx];
-    final step = Duration(minutes: max(1, m.intervalMinutes));
-    final updated = m.copyWith(firstDose: m.firstDose.add(step));
+    final updated = m.copyWith(firstDose: m.firstDose.add(_stepFor(m)));
     meds[idx] = updated;
     await _repo.update(updated);
-    await NotificationService.cancelSeries(_baseIdFor(updated), _repeatCount());
     await _scheduleFor(updated);
   }
 
@@ -105,15 +94,13 @@ class MedListViewModel extends GetxController {
     final idx = meds.indexWhere((e) => e.id == id);
     if (idx < 0) return;
     final m = meds[idx];
-    final step = Duration(minutes: max(1, m.intervalMinutes));
-    final updated = m.copyWith(firstDose: m.firstDose.subtract(step));
+    final updated = m.copyWith(firstDose: m.firstDose.subtract(_stepFor(m)));
     meds[idx] = updated;
     await _repo.update(updated);
-    await NotificationService.cancelSeries(_baseIdFor(updated), _repeatCount());
     await _scheduleFor(updated);
   }
 
-  Future<DateTime?> postpone(int id, Duration d) async {
+  Future<DateTime?> postponeAlarm(int id, Duration d) async {
     final idx = meds.indexWhere((e) => e.id == id);
     if (idx < 0) return null;
     final m = meds[idx];

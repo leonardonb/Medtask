@@ -35,31 +35,35 @@ class _HomePageState extends State<HomePage> {
     super.dispose();
   }
 
-  String _countdown(Medication m, MedListViewModel vm) {
-    final next = vm.nextGrid(m);
-    final diff = next.difference(DateTime.now());
+  String _countdown(Medication m) {
+    final diff = m.firstDose.difference(DateTime.now());
     String two(int n) => n.toString().padLeft(2, '0');
-    if (diff.isNegative) return '00:00:00';
-    final h = diff.inHours;
-    final mm = diff.inMinutes % 60;
-    final s = diff.inSeconds % 60;
-    return '${two(h)}:${two(mm)}:${two(s)}';
+    final h = diff.inHours.abs();
+    final mm = (diff.inMinutes % 60).abs();
+    final s = (diff.inSeconds % 60).abs();
+    final t = '${two(h)}:${two(mm)}:${two(s)}';
+    if (diff.isNegative) return '-$t';
+    return t;
   }
+
+  bool _isLate(Medication m) => m.firstDose.isBefore(DateTime.now());
 
   String _formatNext(DateTime dt) {
     String two(int n) => n.toString().padLeft(2, '0');
     return '${two(dt.day)}/${two(dt.month)}/${dt.year} ${two(dt.hour)}:${two(dt.minute)}';
   }
 
-  Future<void> _showSnackNext(int id, String prefix) async {
-    final vm = _vm;
-    final updated = vm.meds.firstWhereOrNull((e) => e.id == id);
-    if (updated == null) return;
-    final next = vm.nextGrid(updated);
+  Future<void> _showSnackNextDateTime(DateTime when, String prefix) async {
     String two(int n) => n.toString().padLeft(2, '0');
-    final txt = '$prefix ${two(next.hour)}:${two(next.minute)}';
+    final txt = '$prefix ${two(when.hour)}:${two(when.minute)}';
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(txt)));
+  }
+
+  Future<void> _showSnackNextById(int id, String prefix) async {
+    final updated = _vm.meds.firstWhereOrNull((e) => e.id == id);
+    if (updated == null) return;
+    await _showSnackNextDateTime(updated.firstDose, prefix);
   }
 
   @override
@@ -86,9 +90,9 @@ class _HomePageState extends State<HomePage> {
           separatorBuilder: (_, __) => const SizedBox(height: 12),
           itemBuilder: (_, i) {
             final m = vm.meds[i];
-            final next = vm.nextGrid(m);
-            final nextStr = _formatNext(next);
-            final cd = _countdown(m, vm);
+            final nextStr = _formatNext(m.firstDose);
+            final cd = _countdown(m);
+            final late = _isLate(m);
 
             return Card(
               elevation: 0,
@@ -128,15 +132,17 @@ class _HomePageState extends State<HomePage> {
                           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                           decoration: BoxDecoration(
                             borderRadius: BorderRadius.circular(12),
-                            color: Theme.of(context).colorScheme.primary.withOpacity(0.08),
+                            color: late
+                                ? Theme.of(context).colorScheme.error.withOpacity(0.10)
+                                : Theme.of(context).colorScheme.primary.withOpacity(0.08),
                           ),
                           child: Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              const Icon(Icons.timer, size: 18),
+                              Icon(late ? Icons.warning_amber : Icons.timer, size: 18),
                               const SizedBox(width: 6),
                               Text(
-                                cd,
+                                late ? 'Atrasado $cd' : cd,
                                 style: Theme.of(context).textTheme.titleSmall?.copyWith(
                                   fontFeatures: const [FontFeature.tabularFigures()],
                                   fontWeight: FontWeight.w700,
@@ -156,7 +162,7 @@ class _HomePageState extends State<HomePage> {
                                 ? null
                                 : () async {
                               await vm.markTaken(m.id!);
-                              await _showSnackNext(m.id!, 'Próximo às');
+                              await _showSnackNextById(m.id!, 'Próximo às');
                             },
                             icon: const Icon(Icons.check, size: 18),
                             label: const Text('Tomei agora'),
@@ -168,12 +174,15 @@ class _HomePageState extends State<HomePage> {
                             onPressed: m.id == null
                                 ? null
                                 : () async {
-                              await vm.rewindPrevious(m.id!);
-                              await _showSnackNext(m.id!, 'Reagendado para');
-                              if (!mounted) return;
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(content: Text('Marcado como atrasado')),
+                              final d = await showModalBottomSheet<Duration>(
+                                context: context,
+                                showDragHandle: true,
+                                builder: (ctx) => const _PostponeSheet(),
                               );
+                              if (d == null) return;
+                              final when = await vm.postponeAlarm(m.id!, d);
+                              if (when == null) return;
+                              await _showSnackNextDateTime(when, 'Adiado para');
                             },
                             icon: const Icon(Icons.schedule, size: 18),
                             label: const Text('Adiar'),
@@ -186,7 +195,7 @@ class _HomePageState extends State<HomePage> {
                                 ? null
                                 : () async {
                               await vm.skipNext(m.id!);
-                              await _showSnackNext(m.id!, 'Pulou para');
+                              await _showSnackNextById(m.id!, 'Pulou para');
                             },
                             icon: const Icon(Icons.skip_next, size: 18),
                             label: const Text('Pular'),
@@ -253,6 +262,52 @@ class _HomePageState extends State<HomePage> {
         icon: const Icon(Icons.add),
         label: const Text('Adicionar'),
       ),
+    );
+  }
+}
+
+class _PostponeSheet extends StatelessWidget {
+  const _PostponeSheet();
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      minimum: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const SizedBox(height: 6),
+          Text('Adiar lembrete', style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 10,
+            runSpacing: 10,
+            children: const [
+              _DelayChip(label: '+1 min', duration: Duration(minutes: 1)),
+              _DelayChip(label: '+5 min', duration: Duration(minutes: 5)),
+              _DelayChip(label: '+10 min', duration: Duration(minutes: 10)),
+              _DelayChip(label: '+30 min', duration: Duration(minutes: 30)),
+              _DelayChip(label: '+60 min', duration: Duration(minutes: 60)),
+            ],
+          ),
+          const SizedBox(height: 12),
+        ],
+      ),
+    );
+  }
+}
+
+class _DelayChip extends StatelessWidget {
+  final String label;
+  final Duration duration;
+  const _DelayChip({required this.label, required this.duration});
+
+  @override
+  Widget build(BuildContext context) {
+    return ActionChip(
+      label: Text(label),
+      avatar: const Icon(Icons.schedule, size: 18),
+      onPressed: () => Navigator.of(context).pop(duration),
     );
   }
 }
