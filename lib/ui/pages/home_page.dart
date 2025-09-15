@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import '../../viewmodels/med_list_viewmodel.dart';
@@ -35,35 +34,20 @@ class _HomePageState extends State<HomePage> {
     super.dispose();
   }
 
-  String _countdown(Medication m) {
-    final diff = m.firstDose.difference(DateTime.now());
+  String _countdown(Medication m, MedListViewModel vm) {
+    final next = vm.nextGrid(m);
+    final diff = next.difference(DateTime.now());
     String two(int n) => n.toString().padLeft(2, '0');
-    final h = diff.inHours.abs();
-    final mm = (diff.inMinutes % 60).abs();
-    final s = (diff.inSeconds % 60).abs();
-    final t = '${two(h)}:${two(mm)}:${two(s)}';
-    if (diff.isNegative) return '-$t';
-    return t;
+    if (diff.isNegative) return '00:00:00';
+    final h = diff.inHours;
+    final mm = diff.inMinutes % 60;
+    final s = diff.inSeconds % 60;
+    return '${two(h)}:${two(mm)}:${two(s)}';
   }
-
-  bool _isLate(Medication m) => m.firstDose.isBefore(DateTime.now());
 
   String _formatNext(DateTime dt) {
     String two(int n) => n.toString().padLeft(2, '0');
     return '${two(dt.day)}/${two(dt.month)}/${dt.year} ${two(dt.hour)}:${two(dt.minute)}';
-  }
-
-  Future<void> _showSnackNextDateTime(DateTime when, String prefix) async {
-    String two(int n) => n.toString().padLeft(2, '0');
-    final txt = '$prefix ${two(when.hour)}:${two(when.minute)}';
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(txt)));
-  }
-
-  Future<void> _showSnackNextById(int id, String prefix) async {
-    final updated = _vm.meds.firstWhereOrNull((e) => e.id == id);
-    if (updated == null) return;
-    await _showSnackNextDateTime(updated.firstDose, prefix);
   }
 
   @override
@@ -73,6 +57,11 @@ class _HomePageState extends State<HomePage> {
       appBar: AppBar(
         title: const Text('Meus Remédios'),
         actions: [
+          TextButton.icon(
+            onPressed: () => Get.to(() => const EditMedPage()),
+            icon: const Icon(Icons.add),
+            label: const Text('Adicionar'),
+          ),
           IconButton(
             tooltip: 'Configurações',
             icon: const Icon(Icons.settings),
@@ -84,30 +73,90 @@ class _HomePageState extends State<HomePage> {
         if (vm.meds.isEmpty) {
           return const Center(child: Text('Nenhum remédio. Toque + para adicionar.'));
         }
+
+        final now = DateTime.now();
+        int? attentionIndex;
+        Duration? bestDiff;
+        for (var i = 0; i < vm.meds.length; i++) {
+          final n = vm.nextGrid(vm.meds[i]);
+          if (n.isBefore(now)) continue;
+          final d = n.difference(now);
+          if (bestDiff == null || d < bestDiff!) {
+            bestDiff = d;
+            attentionIndex = i;
+          }
+        }
+
         return ListView.separated(
           padding: const EdgeInsets.all(12),
           itemCount: vm.meds.length,
           separatorBuilder: (_, __) => const SizedBox(height: 12),
           itemBuilder: (_, i) {
             final m = vm.meds[i];
-            final nextStr = _formatNext(m.firstDose);
-            final cd = _countdown(m);
-            final late = _isLate(m);
+            final next = vm.nextGrid(m);
+            final nextStr = _formatNext(next);
+            final cd = _countdown(m, vm);
+            final late = next.isBefore(now);
+            final isAttention = !late && attentionIndex == i;
+            final cs = Theme.of(context).colorScheme;
 
             return Card(
               elevation: 0,
-              color: Theme.of(context).colorScheme.surfaceContainerHighest,
+              color: late ? cs.error.withValues(alpha: 0.08) : cs.surfaceContainerHighest,
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
               child: Padding(
                 padding: const EdgeInsets.all(14),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      m.name,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            m.name,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                              fontWeight: FontWeight.w700,
+                              color: late ? cs.error : null,
+                            ),
+                          ),
+                        ),
+                        if (isAttention)
+                          Container(
+                            margin: const EdgeInsets.only(left: 8),
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: cs.error.withValues(alpha: 0.12),
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: Text(
+                              'ATENÇÃO',
+                              style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                                color: cs.error,
+                                fontWeight: FontWeight.w900,
+                                letterSpacing: 1.2,
+                              ),
+                            ),
+                          ),
+                        if (late)
+                          Container(
+                            margin: const EdgeInsets.only(left: 8),
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: cs.error.withValues(alpha: 0.15),
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: Text(
+                              'ATRASADO',
+                              style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                                color: cs.error,
+                                fontWeight: FontWeight.w900,
+                                letterSpacing: 1.2,
+                              ),
+                            ),
+                          ),
+                      ],
                     ),
                     const SizedBox(height: 8),
                     Row(
@@ -132,17 +181,15 @@ class _HomePageState extends State<HomePage> {
                           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                           decoration: BoxDecoration(
                             borderRadius: BorderRadius.circular(12),
-                            color: late
-                                ? Theme.of(context).colorScheme.error.withOpacity(0.10)
-                                : Theme.of(context).colorScheme.primary.withOpacity(0.08),
+                            color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.08),
                           ),
                           child: Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              Icon(late ? Icons.warning_amber : Icons.timer, size: 18),
+                              const Icon(Icons.timer, size: 18),
                               const SizedBox(width: 6),
                               Text(
-                                late ? 'Atrasado $cd' : cd,
+                                cd,
                                 style: Theme.of(context).textTheme.titleSmall?.copyWith(
                                   fontFeatures: const [FontFeature.tabularFigures()],
                                   fontWeight: FontWeight.w700,
@@ -156,50 +203,36 @@ class _HomePageState extends State<HomePage> {
                     const SizedBox(height: 12),
                     Row(
                       children: [
-                        Expanded(
-                          child: FilledButton.icon(
-                            onPressed: m.id == null
-                                ? null
-                                : () async {
-                              await vm.markTaken(m.id!);
-                              await _showSnackNextById(m.id!, 'Próximo às');
-                            },
-                            icon: const Icon(Icons.check, size: 18),
-                            label: const Text('Tomei agora'),
-                          ),
+                        FilledButton.icon(
+                          onPressed: m.id == null ? null : () => vm.markTaken(m.id!),
+                          icon: const Icon(Icons.check),
+                          label: const Text('Tomei agora'),
                         ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: OutlinedButton.icon(
-                            onPressed: m.id == null
-                                ? null
-                                : () async {
-                              final d = await showModalBottomSheet<Duration>(
-                                context: context,
-                                showDragHandle: true,
-                                builder: (ctx) => const _PostponeSheet(),
-                              );
-                              if (d == null) return;
-                              final when = await vm.postponeAlarm(m.id!, d);
-                              if (when == null) return;
-                              await _showSnackNextDateTime(when, 'Adiado para');
-                            },
-                            icon: const Icon(Icons.schedule, size: 18),
-                            label: const Text('Adiar'),
-                          ),
+                        const SizedBox(width: 10),
+                        OutlinedButton.icon(
+                          onPressed: m.id == null
+                              ? null
+                              : () async {
+                            final d = await showModalBottomSheet<Duration>(
+                              context: context,
+                              showDragHandle: true,
+                              builder: (ctx) => const _PostponeSheet(),
+                            );
+                            if (d == null) return;
+                            final when = await vm.postponeAlarm(m.id!, d);
+                            if (!mounted || when == null) return;
+                            String two(int n) => n.toString().padLeft(2, '0');
+                            final txt = 'Adiado para ${two(when.hour)}:${two(when.minute)}';
+                            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(txt)));
+                          },
+                          icon: const Icon(Icons.schedule_send),
+                          label: const Text('Adiar'),
                         ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: OutlinedButton.icon(
-                            onPressed: m.id == null
-                                ? null
-                                : () async {
-                              await vm.skipNext(m.id!);
-                              await _showSnackNextById(m.id!, 'Pulou para');
-                            },
-                            icon: const Icon(Icons.skip_next, size: 18),
-                            label: const Text('Pular'),
-                          ),
+                        const SizedBox(width: 10),
+                        OutlinedButton.icon(
+                          onPressed: m.id == null ? null : () => vm.skipNext(m.id!),
+                          icon: const Icon(Icons.skip_next),
+                          label: const Text('Pular'),
                         ),
                       ],
                     ),
@@ -207,45 +240,29 @@ class _HomePageState extends State<HomePage> {
                     Row(
                       children: [
                         Expanded(
-                          child: OutlinedButton.icon(
-                            onPressed: () => Get.to(() => EditMedPage(existing: m)),
-                            icon: const Icon(Icons.edit, size: 18),
-                            label: const Text('Editar'),
+                          child: Wrap(
+                            spacing: 8,
+                            children: [
+                              OutlinedButton.icon(
+                                onPressed: () => Get.to(() => EditMedPage(existing: m)),
+                                icon: const Icon(Icons.edit),
+                                label: const Text('Editar'),
+                              ),
+                              OutlinedButton.icon(
+                                onPressed: m.id == null ? null : () => vm.toggleEnabled(m.id!, !m.enabled),
+                                icon: Icon(m.enabled ? Icons.notifications_active : Icons.notifications_off),
+                                label: Text(m.enabled ? 'ON' : 'OFF'),
+                              ),
+                            ],
                           ),
                         ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: OutlinedButton.icon(
-                            onPressed: m.id == null
-                                ? null
-                                : () async {
-                              await vm.toggleEnabled(m.id!, !m.enabled);
-                              final msg = m.enabled ? 'Notificações OFF' : 'Notificações ON';
-                              if (!mounted) return;
-                              ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
-                            },
-                            icon: Icon(m.enabled ? Icons.notifications_active : Icons.notifications_off, size: 18),
-                            label: Text(m.enabled ? 'ON' : 'OFF'),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: OutlinedButton.icon(
-                            style: OutlinedButton.styleFrom(
-                              foregroundColor: Theme.of(context).colorScheme.error,
-                              side: BorderSide(color: Theme.of(context).colorScheme.error),
-                            ),
-                            onPressed: m.id == null
-                                ? null
-                                : () async {
-                              await vm.remove(m.id!);
-                              if (!mounted) return;
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(content: Text('Remédio excluído')),
-                              );
-                            },
-                            icon: const Icon(Icons.delete_outline, size: 18),
-                            label: const Text('Excluir'),
+                        OutlinedButton.icon(
+                          onPressed: m.id == null ? null : () => vm.remove(m.id!),
+                          icon: const Icon(Icons.delete_outline),
+                          label: const Text('Excluir'),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: Theme.of(context).colorScheme.error,
+                            side: BorderSide(color: Theme.of(context).colorScheme.error),
                           ),
                         ),
                       ],
@@ -257,11 +274,6 @@ class _HomePageState extends State<HomePage> {
           },
         );
       }),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => Get.to(() => const EditMedPage()),
-        icon: const Icon(Icons.add),
-        label: const Text('Adicionar'),
-      ),
     );
   }
 }
