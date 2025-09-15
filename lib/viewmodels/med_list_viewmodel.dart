@@ -81,8 +81,11 @@ class MedListViewModel extends GetxController {
     final idx = meds.indexWhere((e) => e.id == id);
     if (idx < 0) return;
     final m = meds[idx];
-    await NotificationService.cancelSeries(_baseIdFor(m), _repeatCount());
-    await _scheduleFor(m);
+    final updated = m.copyWith(firstDose: DateTime.now());
+    meds[idx] = updated;
+    await _repo.update(updated);
+    await NotificationService.cancelSeries(_baseIdFor(updated), _repeatCount());
+    await _scheduleFor(updated);
   }
 
   Future<DateTime?> postpone(int id, Duration d) async {
