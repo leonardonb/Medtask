@@ -148,7 +148,7 @@ class NotificationService {
           title: title,
           body: body,
           payload: {'k': payload},
-          groupKey: payload, // "med:<id>"
+          groupKey: payload,
           notificationLayout: NotificationLayout.Default,
         ),
         schedule: NotificationCalendar(
@@ -174,29 +174,16 @@ class NotificationService {
     }
   }
 
-  static Future<void> cancelAllForMed(int medId, {String? medName, int maxPerMed = 64}) async {
+  static Future<void> cancelAllForMed(int medId, {String? medName, int maxPerMed = 32}) async {
     final base = medId * 1000;
-
     for (int i = 0; i < maxPerMed; i++) {
       final id = base + i;
       await AwesomeNotifications().cancel(id);
       await AwesomeNotifications().cancelSchedule(id);
     }
-
     final group = 'med:$medId';
     await AwesomeNotifications().cancelSchedulesByGroupKey(group);
     await AwesomeNotifications().cancelNotificationsByGroupKey(group);
-
-    final scheduled = await AwesomeNotifications().listScheduledNotifications();
-    for (final n in scheduled) {
-      final p = n.content?.payload ?? {};
-      final byPayload = p.values.any((v) => v != null && v.toString().contains(group));
-      final byName = medName != null && (n.content?.body ?? '') == medName;
-      if ((byPayload || byName) && n.content?.id != null) {
-        await AwesomeNotifications().cancel(n.content!.id!);
-        await AwesomeNotifications().cancelSchedule(n.content!.id!);
-      }
-    }
   }
 
   static Future<void> cancelAllSchedules() async {

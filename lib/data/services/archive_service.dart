@@ -20,6 +20,9 @@ class ArchiveService {
     if (!cols.contains('archived_at')) {
       await db.execute('ALTER TABLE medications ADD COLUMN archived_at INTEGER;');
     }
+    if (!cols.contains('auto_archive_at')) {
+      await db.execute('ALTER TABLE medications ADD COLUMN auto_archive_at INTEGER;');
+    }
   }
 
   Future<bool> isArchived(int id) async {
@@ -44,7 +47,8 @@ class ArchiveService {
         'archived_at': DateTime.now().millisecondsSinceEpoch,
         'enabled': 0,
         'first_dose_at': future10y,
-        'next_override_at': null
+        'next_override_at': null,
+        'auto_archive_at': null
       },
       where: 'id = ?',
       whereArgs: [id],

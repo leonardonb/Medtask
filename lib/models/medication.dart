@@ -5,6 +5,7 @@ class Medication {
   final int intervalMinutes;
   final bool enabled;
   final String? sound;
+  final DateTime? autoArchiveAt;
 
   const Medication({
     this.id,
@@ -13,6 +14,7 @@ class Medication {
     required this.intervalMinutes,
     required this.enabled,
     this.sound,
+    this.autoArchiveAt,
   });
 
   Medication copyWith({
@@ -22,6 +24,7 @@ class Medication {
     int? intervalMinutes,
     bool? enabled,
     String? sound,
+    DateTime? autoArchiveAt,
   }) {
     return Medication(
       id: id ?? this.id,
@@ -30,6 +33,7 @@ class Medication {
       intervalMinutes: intervalMinutes ?? this.intervalMinutes,
       enabled: enabled ?? this.enabled,
       sound: sound ?? this.sound,
+      autoArchiveAt: autoArchiveAt == null ? this.autoArchiveAt : autoArchiveAt,
     );
   }
 
@@ -39,11 +43,18 @@ class Medication {
         ? DateTime.fromMillisecondsSinceEpoch(fdRaw)
         : DateTime.now();
 
-    final imRaw = map['interval_minutes'];
+    // >>> CORREÇÃO: somar horas*60 + minutos
     final ihRaw = map['interval_hours'];
-    final intervalMinutes = imRaw is int
-        ? imRaw
-        : (ihRaw is int ? ihRaw * 60 : 480); // default 8h
+    final imRaw = map['interval_minutes'];
+    final h = ihRaw is int ? ihRaw : 0;
+    final mi = imRaw is int ? imRaw : 0;
+    final totalIntervalMinutes = (h * 60) + mi;
+    final intervalMinutes = totalIntervalMinutes > 0 ? totalIntervalMinutes : 480; // default 8h
+
+    final aaRaw = map['auto_archive_at'];
+    final DateTime? autoArchiveAt = aaRaw is int
+        ? DateTime.fromMillisecondsSinceEpoch(aaRaw)
+        : null;
 
     return Medication(
       id: map['id'] as int?,
@@ -52,6 +63,7 @@ class Medication {
       intervalMinutes: intervalMinutes,
       enabled: ((map['enabled'] ?? 1) as int) == 1,
       sound: map['sound'] as String?,
+      autoArchiveAt: autoArchiveAt,
     );
   }
 
@@ -63,6 +75,7 @@ class Medication {
       'interval_minutes': intervalMinutes,
       'enabled': enabled ? 1 : 0,
       'sound': sound,
+      'auto_archive_at': autoArchiveAt?.millisecondsSinceEpoch,
     };
   }
 }
