@@ -17,6 +17,7 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage> {
   final _vm = Get.put(MedListViewModel(), permanent: true);
   final Stream<DateTime> _tick = Stream.periodic(const Duration(seconds: 1), (_) => DateTime.now()).asBroadcastStream();
+  Timer? _sweepTicker;
 
   @override
   void initState() {
@@ -25,6 +26,16 @@ class _HomePageState extends State<HomePage> {
       await _vm.init();
       if (mounted) setState(() {});
     });
+    _sweepTicker = Timer.periodic(const Duration(seconds: 1), (_) async {
+      await _vm.tickAutoArchive();
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _sweepTicker?.cancel();
+    super.dispose();
   }
 
   String _formatNext(DateTime dt) {
@@ -33,6 +44,7 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<void> _refresh() async {
+    await _vm.tickAutoArchive();
     await _vm.init();
     if (mounted) setState(() {});
   }
