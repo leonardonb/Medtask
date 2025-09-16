@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
+import 'package:flutter/services.dart';
 import '../../models/medication.dart';
 import '../../viewmodels/med_list_viewmodel.dart';
 import '../../data/services/archive_service.dart';
@@ -29,8 +30,8 @@ class _EditMedPageState extends State<EditMedPage> {
   bool _archived = false;
   bool _archLoading = false;
   bool _justUnarchived = false;
-  bool _saved = false;
   bool _saving = false;
+  bool _closed = false;
 
   @override
   void initState() {
@@ -123,6 +124,13 @@ class _EditMedPageState extends State<EditMedPage> {
     return DateTime(_autoDate!.year, _autoDate!.month, _autoDate!.day, _autoTime!.hour, _autoTime!.minute);
   }
 
+  void _safeClose() {
+    if (_closed) return;
+    _closed = true;
+    if (!mounted) return;
+    Get.back(result: true);
+  }
+
   Future<void> _save() async {
     if (_saving) return;
     if (!_formKey.currentState!.validate()) return;
@@ -136,6 +144,11 @@ class _EditMedPageState extends State<EditMedPage> {
     final current = widget.existing;
     final enabledFinal = _justUnarchived ? true : _enabled;
     final autoAt = _combineAuto();
+
+    if (current != null && _justUnarchived && current.id != null) {
+      await _archiveSvc.unarchive(current.id!);
+      _archived = false;
+    }
 
     final med = current == null
         ? Medication(
@@ -156,17 +169,7 @@ class _EditMedPageState extends State<EditMedPage> {
     );
 
     await vm.upsert(med);
-    _saved = true;
-    _justUnarchived = false;
-
-    if (!mounted) return;
-    if (Navigator.of(context, rootNavigator: true).canPop()) {
-      Navigator.of(context, rootNavigator: true).pop(true);
-    } else if (Navigator.canPop(context)) {
-      Navigator.pop(context, true);
-    } else {
-      Get.back(result: true);
-    }
+    _safeClose();
   }
 
   Future<void> _toggleArchive() async {
@@ -184,16 +187,9 @@ class _EditMedPageState extends State<EditMedPage> {
       if (Get.isRegistered<MedListViewModel>()) {
         await Get.find<MedListViewModel>().init();
       }
-      if (!mounted) return;
       _archived = true;
       _archLoading = false;
-      if (Navigator.of(context, rootNavigator: true).canPop()) {
-        Navigator.of(context, rootNavigator: true).pop(true);
-      } else if (Navigator.canPop(context)) {
-        Navigator.pop(context, true);
-      } else {
-        Get.back(result: true);
-      }
+      _safeClose();
       return;
     } else {
       setState(() {
@@ -206,7 +202,7 @@ class _EditMedPageState extends State<EditMedPage> {
   }
 
   Future<bool> _handleWillPop() async {
-    return true;
+    return !_saving;
   }
 
   @override
@@ -273,6 +269,7 @@ class _EditMedPageState extends State<EditMedPage> {
                           hintText: 'Ex.: 8',
                         ),
                         keyboardType: TextInputType.number,
+                        inputFormatters: [FilteringTextInputFormatter.digitsOnly],
                         validator: (v) {
                           if (v == null || v.isEmpty) return 'Informe as horas';
                           final n = int.tryParse(v);
@@ -290,12 +287,13 @@ class _EditMedPageState extends State<EditMedPage> {
                           hintText: '0–59',
                         ),
                         keyboardType: TextInputType.number,
+                        inputFormatters: [FilteringTextInputFormatter.digitsOnly],
                         validator: (v) {
                           if (v == null || v.isEmpty) return 'Informe os minutos';
                           final n = int.tryParse(v);
                           if (n == null || n < 0 || n > 59) return 'Minutos inválidos';
-                          final h = int.tryParse(_hoursCtrl.text) ?? 0;
-                          if (h == 0 && n == 0) return 'Intervalo não pode ser 0';
+                          final hh = int.tryParse(_hoursCtrl.text) ?? 0;
+                          if (hh == 0 && n == 0) return 'Intervalo não pode ser 0';
                           return null;
                         },
                       ),
