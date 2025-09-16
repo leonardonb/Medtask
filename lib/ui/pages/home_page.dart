@@ -7,7 +7,7 @@ import '../../models/medication.dart';
 import 'edit_med_page.dart';
 import '../../features/settings/settings_page.dart';
 import 'archived_meds_page.dart';
-//import 'info_page.dart';
+import '/ui/pages/about/about_page.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -75,12 +75,12 @@ class _HomePageState extends State<HomePage> {
                 await _refresh();
               }
             },
+           ),
+           IconButton(
+             tooltip: 'Informações',
+             icon: const Icon(Icons.info_outline),
+             onPressed: () => Get.to(() => const AboutPage()),
           ),
-          // IconButton(
-          //   tooltip: 'Informações',
-          //   icon: const Icon(Icons.info_outline),
-          //   onPressed: () => Get.to(() => const InfoPage()),
-          // ),
           IconButton(
             tooltip: 'Configurações',
             icon: const Icon(Icons.settings),
