@@ -69,7 +69,7 @@ class _SettingsPageState extends State<SettingsPage> {
     }
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Som atualizado nas notificações futuras')),
+      const SnackBar(content: Text('Preferência aplicada para notificações futuras')),
     );
   }
 
@@ -79,16 +79,7 @@ class _SettingsPageState extends State<SettingsPage> {
       await _askPermission();
       if (!_allowed) return;
     }
-    final key = SettingsService.channelKeyForChoice(_choice!);
-    await AwesomeNotifications().createNotification(
-      content: NotificationContent(
-        id: DateTime.now().millisecondsSinceEpoch.remainder(1 << 31),
-        channelKey: key,
-        title: 'Prévia do alarme',
-        body: _choice == AlarmChoice.system ? 'Som do sistema' : 'Som: alarme.mp3',
-        notificationLayout: NotificationLayout.Default,
-      ),
-    );
+    await NotificationService.previewSelectedSound();
   }
 
   @override
@@ -149,6 +140,12 @@ class _SettingsPageState extends State<SettingsPage> {
           RadioListTile<AlarmChoice>(
             title: const Text('Som do app (alarme.mp3)'),
             value: AlarmChoice.custom,
+            groupValue: _choice,
+            onChanged: (c) => _set(c!),
+          ),
+          RadioListTile<AlarmChoice>(
+            title: const Text('Apenas vibrar'),
+            value: AlarmChoice.vibrate,
             groupValue: _choice,
             onChanged: (c) => _set(c!),
           ),

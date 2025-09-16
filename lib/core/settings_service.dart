@@ -1,7 +1,7 @@
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter/material.dart';
 
-enum AlarmChoice { system, custom }
+enum AlarmChoice { system, custom, vibrate }
 
 class SettingsService {
   static const _kAlarmChoiceKey = 'alarm_choice';
@@ -9,17 +9,37 @@ class SettingsService {
 
   static Future<AlarmChoice> getAlarmChoice() async {
     final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString(_kAlarmChoiceKey) ?? 'system';
-    return raw == 'custom' ? AlarmChoice.custom : AlarmChoice.system;
+    final raw = prefs.getString(_kAlarmChoiceKey);
+    switch (raw) {
+      case 'custom':
+        return AlarmChoice.custom;
+      case 'vibrate':
+        return AlarmChoice.vibrate;
+      case 'system':
+      default:
+        return AlarmChoice.system;
+    }
   }
 
   static Future<void> setAlarmChoice(AlarmChoice c) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_kAlarmChoiceKey, c == AlarmChoice.custom ? 'custom' : 'system');
+    final v = switch (c) {
+      AlarmChoice.system => 'system',
+      AlarmChoice.custom => 'custom',
+      AlarmChoice.vibrate => 'vibrate',
+    };
+    await prefs.setString(_kAlarmChoiceKey, v);
   }
 
   static String channelKeyForChoice(AlarmChoice c) {
-    return c == AlarmChoice.custom ? 'meds_channel_custom_v4' : 'meds_channel_system_v4';
+    switch (c) {
+      case AlarmChoice.system:
+        return 'system';
+      case AlarmChoice.custom:
+        return 'custom';
+      case AlarmChoice.vibrate:
+        return 'vibrate';
+    }
   }
 
   static Future<ThemeMode> getThemeMode() async {
