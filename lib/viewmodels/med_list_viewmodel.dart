@@ -1,16 +1,26 @@
 import 'dart:math';
 import 'package:get/get.dart';
+import 'package:sqflite/sqflite.dart';
 import '../core/notification_service.dart';
 import '../models/medication.dart';
 import '../data/repositories/med_repository.dart';
+import '../data/db/app_db.dart';
 
 class MedListViewModel extends GetxController {
   final RxList<Medication> meds = <Medication>[].obs;
   final MedRepository _repo = MedRepository();
 
   Future<void> init() async {
-    final all = await _repo.getAll();
-    meds.assignAll(all);
+    final db = await AppDb.instance;
+    await _ensureSchema(db);
+    final rows = await db.query(
+      'medications',
+      where: 'archived = 0 AND first_dose_at IS NOT NULL',
+      orderBy: 'name COLLATE NOCASE',
+    );
+    final active = rows.map((m) => Medication.fromMap(m)).toList();
+    meds.assignAll(active);
+    await _cancelForInactive(db);
     for (final m in meds) {
       await _scheduleFor(m);
     }
@@ -41,7 +51,7 @@ class MedListViewModel extends GetxController {
       firstWhen: fireAt,
       title: 'Hora do remédio',
       body: m.name,
-      sound: m.sound,
+      sound: (m.sound ?? 'alert'),
       repeatEvery: const Duration(minutes: 5),
       repeatCount: _repeatCount(),
       payload: 'med:${m.id}',
@@ -59,7 +69,7 @@ class MedListViewModel extends GetxController {
         firstWhen: fireAt,
         title: 'Hora do remédio',
         body: m.name,
-        sound: m.sound,
+        sound: (m.sound ?? 'alert'),
         repeatEvery: const Duration(minutes: 5),
         repeatCount: _repeatCount(),
         payload: 'med:${m.id}',
@@ -111,7 +121,7 @@ class MedListViewModel extends GetxController {
       firstWhen: first,
       title: 'Hora do remédio',
       body: m.name,
-      sound: m.sound,
+      sound: (m.sound ?? 'alert'),
       repeatEvery: const Duration(minutes: 5),
       repeatCount: _repeatCount(),
       payload: 'med:${m.id}',
@@ -129,6 +139,9 @@ class MedListViewModel extends GetxController {
     await _repo.update(updated);
     if (!enabled) {
       await NotificationService.cancelSeries(_baseIdFor(updated), _repeatCount());
+      if (updated.id != null) {
+        await NotificationService.cancelAllForMed(updated.id!, medName: updated.name);
+      }
     } else {
       await _scheduleFor(updated);
     }
@@ -140,6 +153,9 @@ class MedListViewModel extends GetxController {
     final m = meds[idx];
     meds.removeAt(idx);
     await NotificationService.cancelSeries(_baseIdFor(m), _repeatCount());
+    if (m.id != null) {
+      await NotificationService.cancelAllForMed(m.id!, medName: m.name);
+    }
     await _repo.delete(id);
   }
 
@@ -154,6 +170,33 @@ class MedListViewModel extends GetxController {
       final idx = meds.indexWhere((e) => e.id == med.id);
       if (idx >= 0) meds[idx] = med;
       await _scheduleFor(med);
+    }
+  }
+
+  Future<void> _ensureSchema(Database db) async {
+    final info = await db.rawQuery("PRAGMA table_info('medications')");
+    final cols = info.map((e) => (e['name'] ?? '').toString()).toSet();
+    if (!cols.contains('archived')) {
+      await db.execute('ALTER TABLE medications ADD COLUMN archived INTEGER NOT NULL DEFAULT 0;');
+    }
+    if (!cols.contains('archived_at')) {
+      await db.execute('ALTER TABLE medications ADD COLUMN archived_at INTEGER;');
+    }
+  }
+
+  Future<void> _cancelForInactive(Database db) async {
+    final rows = await db.query(
+      'medications',
+      columns: ['id', 'name'],
+      where: 'archived = 1 OR enabled = 0',
+    );
+    for (final r in rows) {
+      final id = r['id'];
+      final name = r['name']?.toString();
+      if (id is int) {
+        await NotificationService.cancelSeries(id * 1000, _repeatCount());
+        await NotificationService.cancelAllForMed(id, medName: name);
+      }
     }
   }
 }

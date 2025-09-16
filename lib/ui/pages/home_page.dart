@@ -1,10 +1,12 @@
 import 'dart:async';
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import '../../viewmodels/med_list_viewmodel.dart';
 import '../../models/medication.dart';
 import 'edit_med_page.dart';
 import '../../features/settings/settings_page.dart';
+import 'archived_meds_page.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -61,6 +63,11 @@ class _HomePageState extends State<HomePage> {
             onPressed: () => Get.to(() => const EditMedPage()),
             icon: const Icon(Icons.add),
             label: const Text('Adicionar'),
+          ),
+          IconButton(
+            tooltip: 'Medicamentos arquivados',
+            icon: const Icon(Icons.archive_outlined),
+            onPressed: () => Get.to(() => const ArchivedMedsPage()),
           ),
           IconButton(
             tooltip: 'Configurações',
@@ -201,68 +208,79 @@ class _HomePageState extends State<HomePage> {
                       ],
                     ),
                     const SizedBox(height: 12),
-                    Row(
-                      children: [
-                        FilledButton.icon(
-                          onPressed: m.id == null ? null : () => vm.markTaken(m.id!),
-                          icon: const Icon(Icons.check),
-                          label: const Text('Tomei agora'),
-                        ),
-                        const SizedBox(width: 10),
-                        OutlinedButton.icon(
-                          onPressed: m.id == null
-                              ? null
-                              : () async {
-                            final d = await showModalBottomSheet<Duration>(
-                              context: context,
-                              showDragHandle: true,
-                              builder: (ctx) => const _PostponeSheet(),
-                            );
-                            if (d == null) return;
-                            final when = await vm.postponeAlarm(m.id!, d);
-                            if (!mounted || when == null) return;
-                            String two(int n) => n.toString().padLeft(2, '0');
-                            final txt = 'Adiado para ${two(when.hour)}:${two(when.minute)}';
-                            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(txt)));
-                          },
-                          icon: const Icon(Icons.schedule_send),
-                          label: const Text('Adiar'),
-                        ),
-                        const SizedBox(width: 10),
-                        OutlinedButton.icon(
-                          onPressed: m.id == null ? null : () => vm.skipNext(m.id!),
-                          icon: const Icon(Icons.skip_next),
-                          label: const Text('Pular'),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 10),
+
+                    // Linha 1: Tomei agora | Adiar | Pular
                     Row(
                       children: [
                         Expanded(
-                          child: Wrap(
-                            spacing: 8,
-                            children: [
-                              OutlinedButton.icon(
-                                onPressed: () => Get.to(() => EditMedPage(existing: m)),
-                                icon: const Icon(Icons.edit),
-                                label: const Text('Editar'),
-                              ),
-                              OutlinedButton.icon(
-                                onPressed: m.id == null ? null : () => vm.toggleEnabled(m.id!, !m.enabled),
-                                icon: Icon(m.enabled ? Icons.notifications_active : Icons.notifications_off),
-                                label: Text(m.enabled ? 'ON' : 'OFF'),
-                              ),
-                            ],
+                          child: FilledButton.icon(
+                            onPressed: m.id == null ? null : () => vm.markTaken(m.id!),
+                            icon: const Icon(Icons.check),
+                            label: const Text('Tomei agora'),
                           ),
                         ),
-                        OutlinedButton.icon(
-                          onPressed: m.id == null ? null : () => vm.remove(m.id!),
-                          icon: const Icon(Icons.delete_outline),
-                          label: const Text('Excluir'),
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: Theme.of(context).colorScheme.error,
-                            side: BorderSide(color: Theme.of(context).colorScheme.error),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            onPressed: m.id == null
+                                ? null
+                                : () async {
+                              final d = await showModalBottomSheet<Duration>(
+                                context: context,
+                                showDragHandle: true,
+                                builder: (ctx) => const _PostponeSheet(),
+                              );
+                              if (d == null) return;
+                              final when = await vm.postponeAlarm(m.id!, d);
+                              if (!mounted || when == null) return;
+                              String two(int n) => n.toString().padLeft(2, '0');
+                              final txt = 'Adiado para ${two(when.hour)}:${two(when.minute)}';
+                              ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(txt)));
+                            },
+                            icon: const Icon(Icons.schedule_send),
+                            label: const Text('Adiar'),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            onPressed: m.id == null ? null : () => vm.skipNext(m.id!),
+                            icon: const Icon(Icons.skip_next),
+                            label: const Text('Pular'),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+
+                    // Linha 2: Editar | ON/OFF | Excluir
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            onPressed: () => Get.to(() => EditMedPage(existing: m)),
+                            icon: const Icon(Icons.edit),
+                            label: const Text('Editar'),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            onPressed: m.id == null ? null : () => vm.toggleEnabled(m.id!, !m.enabled),
+                            icon: Icon(m.enabled ? Icons.notifications_active : Icons.notifications_off),
+                            label: Text(m.enabled ? 'ON' : 'OFF'),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            onPressed: m.id == null ? null : () => vm.remove(m.id!),
+                            icon: const Icon(Icons.delete_outline),
+                            label: const Text('Excluir'),
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: Theme.of(context).colorScheme.error,
+                              side: BorderSide(color: Theme.of(context).colorScheme.error),
+                            ),
                           ),
                         ),
                       ],

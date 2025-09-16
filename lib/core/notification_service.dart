@@ -1,103 +1,70 @@
-import 'dart:io';
-import 'package:flutter/services.dart';
 import 'package:awesome_notifications/awesome_notifications.dart';
-import 'package:android_intent_plus/android_intent.dart';
 import 'settings_service.dart';
 
 class NotificationService {
-  static bool _initialized = false;
+  static const String medsChannel = 'meds';
+  static const String systemChannel = 'system';
+  static const String customChannel = 'custom';
 
-  static Future<void> init({bool debug = false}) async {
-    if (_initialized) return;
-    try {
-      await AwesomeNotifications().initialize(
-        null,
-        [
-          NotificationChannel(
-            channelKey: 'meds_channel_system_v4',
-            channelName: 'Lembretes (Sistema)',
-            channelDescription: 'Som padrão do sistema',
-            playSound: true,
-            defaultRingtoneType: DefaultRingtoneType.Alarm,
-            importance: NotificationImportance.Max,
-            enableVibration: true,
-            enableLights: true,
-          ),
-          NotificationChannel(
-            channelKey: 'meds_channel_custom_v4',
-            channelName: 'Lembretes (Alarme do app)',
-            channelDescription: 'Usa o arquivo alarme.mp3 do app',
-            playSound: true,
-            soundSource: 'resource://raw/alarme',
-            importance: NotificationImportance.Max,
-            enableVibration: true,
-            enableLights: true,
-          ),
-        ],
-        debug: debug,
-      );
-      _initialized = true;
-    } on PlatformException {
-      await AwesomeNotifications().initialize(
-        null,
-        [
-          NotificationChannel(
-            channelKey: 'meds_channel_system_v4',
-            channelName: 'Lembretes (Sistema)',
-            channelDescription: 'Som padrão do sistema',
-            playSound: true,
-            defaultRingtoneType: DefaultRingtoneType.Alarm,
-            importance: NotificationImportance.Max,
-            enableVibration: true,
-            enableLights: true,
-          ),
-          NotificationChannel(
-            channelKey: 'meds_channel_custom_v4',
-            channelName: 'Lembretes (Alarme do app)',
-            channelDescription: 'Som custom indisponível; usando sistema',
-            playSound: true,
-            defaultRingtoneType: DefaultRingtoneType.Alarm,
-            importance: NotificationImportance.Max,
-            enableVibration: true,
-            enableLights: true,
-          ),
-        ],
-        debug: debug,
-      );
-      _initialized = true;
+  static Future<void> init() async {
+    await AwesomeNotifications().initialize(
+      null,
+      [
+        NotificationChannel(
+          channelKey: medsChannel,
+          channelName: 'Lembretes de remédio',
+          channelDescription: 'Alertas recorrentes para tomada de medicamentos',
+          importance: NotificationImportance.Max,
+          defaultPrivacy: NotificationPrivacy.Public,
+          playSound: true,
+          enableVibration: true,
+          locked: true,
+        ),
+        NotificationChannel(
+          channelKey: systemChannel,
+          channelName: 'Som do sistema',
+          channelDescription: 'Canal para tocar com som do sistema',
+          importance: NotificationImportance.Max,
+          defaultPrivacy: NotificationPrivacy.Public,
+          playSound: true,
+          enableVibration: true,
+          locked: true,
+        ),
+        NotificationChannel(
+          channelKey: customChannel,
+          channelName: 'Som do app',
+          channelDescription: 'Canal para tocar com som customizado do app',
+          importance: NotificationImportance.Max,
+          defaultPrivacy: NotificationPrivacy.Public,
+          playSound: true,
+          enableVibration: true,
+          locked: true,
+          soundSource: 'resource://raw/alarme',
+        ),
+      ],
+      debug: false,
+    );
+
+    final allowed = await AwesomeNotifications().isNotificationAllowed();
+    if (!allowed) {
+      await AwesomeNotifications().requestPermissionToSendNotifications();
     }
   }
 
-  static Future<bool> areNotificationsEnabled() async {
-    return AwesomeNotifications().isNotificationAllowed();
-  }
-
   static Future<void> openNotificationSettings(String packageName) async {
-    if (!Platform.isAndroid) return;
-    final intent = AndroidIntent(
-      action: 'android.settings.APP_NOTIFICATION_SETTINGS',
-      arguments: {'android.provider.extra.APP_PACKAGE': packageName},
-    );
-    await intent.launch();
-  }
-
-  static Future<void> openBatteryOptimizationSettings() async {
-    if (!Platform.isAndroid) return;
-    final intent = AndroidIntent(
-      action: 'android.settings.IGNORE_BATTERY_OPTIMIZATION_SETTINGS',
-    );
-    await intent.launch();
+    final allowed = await AwesomeNotifications().isNotificationAllowed();
+    if (!allowed) {
+      await AwesomeNotifications().requestPermissionToSendNotifications();
+    }
   }
 
   static Future<void> showNow() async {
-    final choice = await SettingsService.getAlarmChoice();
-    final key = SettingsService.channelKeyForChoice(choice);
     await AwesomeNotifications().createNotification(
       content: NotificationContent(
         id: DateTime.now().millisecondsSinceEpoch.remainder(1 << 31),
-        channelKey: key,
-        title: 'Ei, olha a hora do remédio…',
-        body: 'Notificação imediata.',
+        channelKey: medsChannel,
+        title: 'Notificação imediata',
+        body: 'Teste de notificação imediata',
         notificationLayout: NotificationLayout.Default,
       ),
     );
@@ -105,76 +72,59 @@ class NotificationService {
 
   static Future<void> timerIn10s() async {
     final when = DateTime.now().add(const Duration(seconds: 10));
-    await scheduleOne(
-      id: DateTime.now().microsecondsSinceEpoch.remainder(1 << 31),
-      when: when,
-      title: 'Lembrete em 10s',
-      body: 'Disparado com agendamento padrão.',
-      exactIfPossible: false,
+    await AwesomeNotifications().createNotification(
+      content: NotificationContent(
+        id: DateTime.now().millisecondsSinceEpoch.remainder(1 << 31),
+        channelKey: medsChannel,
+        title: 'Agendado ~10s',
+        body: 'Teste de agendamento em ~10 segundos',
+        notificationLayout: NotificationLayout.Default,
+      ),
+      schedule: NotificationCalendar(
+        year: when.year,
+        month: when.month,
+        day: when.day,
+        hour: when.hour,
+        minute: when.minute,
+        second: when.second,
+        millisecond: when.millisecond,
+        repeats: false,
+        allowWhileIdle: true,
+      ),
     );
   }
 
   static Future<void> timerExactIn15s() async {
     final when = DateTime.now().add(const Duration(seconds: 15));
-    await scheduleOne(
-      id: DateTime.now().microsecondsSinceEpoch.remainder(1 << 31),
-      when: when,
-      title: 'Lembrete exato em 15s',
-      body: 'Disparado com alarme exato.',
-      exactIfPossible: true,
-    );
-  }
-
-  static Future<void> scheduleOne({
-    required int id,
-    required DateTime when,
-    required String title,
-    required String body,
-    bool exactIfPossible = true,
-  }) async {
-    final choice = await SettingsService.getAlarmChoice();
-    final key = SettingsService.channelKeyForChoice(choice);
     await AwesomeNotifications().createNotification(
       content: NotificationContent(
-        id: id,
-        channelKey: key,
-        title: title,
-        body: body,
-        notificationLayout: NotificationLayout.Default,
-      ),
-      schedule: NotificationCalendar.fromDate(
-        date: when,
-        preciseAlarm: exactIfPossible,
-      ),
-    );
-  }
-
-  static Future<void> scheduleDaily({
-    required int id,
-    required int hour,
-    required int minute,
-    required String title,
-    required String body,
-    bool exactIfPossible = true,
-  }) async {
-    final choice = await SettingsService.getAlarmChoice();
-    final key = SettingsService.channelKeyForChoice(choice);
-    await AwesomeNotifications().createNotification(
-      content: NotificationContent(
-        id: id,
-        channelKey: key,
-        title: title,
-        body: body,
+        id: DateTime.now().millisecondsSinceEpoch.remainder(1 << 31),
+        channelKey: medsChannel,
+        title: 'Agendado exato ~15s',
+        body: 'Teste de agendamento exato em ~15 segundos',
         notificationLayout: NotificationLayout.Default,
       ),
       schedule: NotificationCalendar(
-        hour: hour,
-        minute: minute,
-        second: 0,
-        repeats: true,
-        preciseAlarm: exactIfPossible,
+        year: when.year,
+        month: when.month,
+        day: when.day,
+        hour: when.hour,
+        minute: when.minute,
+        second: when.second,
+        millisecond: when.millisecond,
+        repeats: false,
+        allowWhileIdle: true,
       ),
     );
+  }
+
+  static Future<void> openBatteryOptimizationSettings() async {
+    return;
+  }
+
+  static Future<String> _currentChannelKey() async {
+    final choice = await SettingsService.getAlarmChoice();
+    return SettingsService.channelKeyForChoice(choice);
   }
 
   static Future<void> scheduleSeries({
@@ -182,27 +132,35 @@ class NotificationService {
     required DateTime firstWhen,
     required String title,
     required String body,
-    String? sound,
+    required String sound,
     required Duration repeatEvery,
     required int repeatCount,
-    String? payload,
+    required String payload,
   }) async {
-    final choice = await SettingsService.getAlarmChoice();
-    final key = SettingsService.channelKeyForChoice(choice);
+    final channel = await _currentChannelKey();
     for (int i = 0; i < repeatCount; i++) {
+      final id = baseId + i;
       final when = firstWhen.add(repeatEvery * i);
       await AwesomeNotifications().createNotification(
         content: NotificationContent(
-          id: baseId + i,
-          channelKey: key,
+          id: id,
+          channelKey: channel,
           title: title,
           body: body,
-          payload: payload == null ? null : {'p': payload},
+          payload: {'k': payload},
+          groupKey: payload, // "med:<id>"
           notificationLayout: NotificationLayout.Default,
         ),
-        schedule: NotificationCalendar.fromDate(
-          date: when,
-          preciseAlarm: true,
+        schedule: NotificationCalendar(
+          year: when.year,
+          month: when.month,
+          day: when.day,
+          hour: when.hour,
+          minute: when.minute,
+          second: when.second,
+          millisecond: when.millisecond,
+          repeats: false,
+          allowWhileIdle: true,
         ),
       );
     }
@@ -214,5 +172,34 @@ class NotificationService {
       await AwesomeNotifications().cancel(id);
       await AwesomeNotifications().cancelSchedule(id);
     }
+  }
+
+  static Future<void> cancelAllForMed(int medId, {String? medName, int maxPerMed = 64}) async {
+    final base = medId * 1000;
+
+    for (int i = 0; i < maxPerMed; i++) {
+      final id = base + i;
+      await AwesomeNotifications().cancel(id);
+      await AwesomeNotifications().cancelSchedule(id);
+    }
+
+    final group = 'med:$medId';
+    await AwesomeNotifications().cancelSchedulesByGroupKey(group);
+    await AwesomeNotifications().cancelNotificationsByGroupKey(group);
+
+    final scheduled = await AwesomeNotifications().listScheduledNotifications();
+    for (final n in scheduled) {
+      final p = n.content?.payload ?? {};
+      final byPayload = p.values.any((v) => v != null && v.toString().contains(group));
+      final byName = medName != null && (n.content?.body ?? '') == medName;
+      if ((byPayload || byName) && n.content?.id != null) {
+        await AwesomeNotifications().cancel(n.content!.id!);
+        await AwesomeNotifications().cancelSchedule(n.content!.id!);
+      }
+    }
+  }
+
+  static Future<void> cancelAllSchedules() async {
+    await AwesomeNotifications().cancelAllSchedules();
   }
 }
