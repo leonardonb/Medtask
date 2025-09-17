@@ -29,7 +29,21 @@ android {
 
     buildTypes {
         release {
+            // se ainda não tiver keystore de release, pode manter debug temporariamente
             signingConfig = signingConfigs.getByName("debug")
+
+            // mantém shrink/minify ativos e aplica o proguard com as regras acima
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
+        }
+        debug {
+            // sem minify no debug
+            isMinifyEnabled = false
+            isShrinkResources = false
         }
     }
 }
