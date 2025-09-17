@@ -18,6 +18,7 @@ class EditMedPage extends StatefulWidget {
 class _EditMedPageState extends State<EditMedPage> {
   final _formKey = GlobalKey<FormState>();
   late final TextEditingController _nameCtrl;
+  late final TextEditingController _daysCtrl;
   late final TextEditingController _hoursCtrl;
   late final TextEditingController _minsCtrl;
   late DateTime _date;
@@ -37,9 +38,16 @@ class _EditMedPageState extends State<EditMedPage> {
     final now = DateTime.now().add(const Duration(minutes: 1));
     final m = widget.existing;
     _nameCtrl = TextEditingController(text: m?.name ?? '');
+
     final totalMin = m?.intervalMinutes ?? 480;
-    _hoursCtrl = TextEditingController(text: (totalMin ~/ 60).toString());
-    _minsCtrl = TextEditingController(text: (totalMin % 60).toString());
+    final d = totalMin ~/ 1440;
+    final remAfterDays = totalMin % 1440;
+    final h = remAfterDays ~/ 60;
+    final mi = remAfterDays % 60;
+    _daysCtrl = TextEditingController(text: d.toString());
+    _hoursCtrl = TextEditingController(text: h.toString());
+    _minsCtrl = TextEditingController(text: mi.toString());
+
     final first = m?.firstDose ?? now;
     _date = DateTime(first.year, first.month, first.day);
     _time = TimeOfDay(hour: first.hour, minute: first.minute);
@@ -69,6 +77,7 @@ class _EditMedPageState extends State<EditMedPage> {
   @override
   void dispose() {
     _nameCtrl.dispose();
+    _daysCtrl.dispose();
     _hoursCtrl.dispose();
     _minsCtrl.dispose();
     super.dispose();
@@ -120,12 +129,14 @@ class _EditMedPageState extends State<EditMedPage> {
 
     final vm = Get.find<MedListViewModel>();
     final when = _combine(_date, _time);
+
+    final d = int.tryParse(_daysCtrl.text) ?? 0;
     final h = int.tryParse(_hoursCtrl.text) ?? 0;
     final mi = int.tryParse(_minsCtrl.text) ?? 0;
-    final minutes = h * 60 + mi;
-    final current = widget.existing;
+    final minutes = d * 1440 + h * 60 + mi;
 
-    final shouldBeEnabled = _justUnarchived ? true : _enabled;
+    final current = widget.existing;
+    final shouldBeEnabled = (current == null) ? true : (_justUnarchived ? true : _enabled);
     final autoAt = _combineAuto();
 
     final med = current == null
@@ -156,7 +167,11 @@ class _EditMedPageState extends State<EditMedPage> {
           await _archiveSvc.unarchive(persistedId);
         } catch (_) {}
       }
-      await vm.toggleEnabled(persistedId, shouldBeEnabled);
+      if (current == null || _justUnarchived) {
+        await vm.toggleEnabled(persistedId, true);
+      } else {
+        await vm.toggleEnabled(persistedId, shouldBeEnabled);
+      }
     }
 
     await vm.init();
@@ -182,7 +197,7 @@ class _EditMedPageState extends State<EditMedPage> {
         await Get.find<MedListViewModel>().init();
       }
       if (!mounted) return;
-      Navigator.of(context, rootNavigator: true).pop(true);
+      Navigator.of(context, rootNavigator: true).pop({'refresh': true});
       return;
     } else {
       try {
@@ -194,12 +209,7 @@ class _EditMedPageState extends State<EditMedPage> {
         await vm.init();
       }
       if (!mounted) return;
-      setState(() {
-        _archived = false;
-        _justUnarchived = true;
-        _enabled = true;
-        _archLoading = false;
-      });
+      Navigator.of(context, rootNavigator: true).popUntil((route) => route.isFirst);
     }
   }
 
@@ -259,16 +269,35 @@ class _EditMedPageState extends State<EditMedPage> {
                 children: [
                   Expanded(
                     child: TextFormField(
+                      controller: _daysCtrl,
+                      decoration: const InputDecoration(
+                        labelText: 'Intervalo (dias)',
+                        hintText: 'Ex.: 1',
+                      ),
+                      keyboardType: TextInputType.number,
+                      textInputAction: TextInputAction.next,
+                      validator: (v) {
+                        if (v == null || v.isEmpty) return null;
+                        final n = int.tryParse(v);
+                        if (n == null || n < 0) return 'Dias inválidos';
+                        return null;
+                      },
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: TextFormField(
                       controller: _hoursCtrl,
                       decoration: const InputDecoration(
                         labelText: 'Intervalo (horas)',
-                        hintText: 'Ex.: 8',
+                        hintText: '0–23',
                       ),
                       keyboardType: TextInputType.number,
+                      textInputAction: TextInputAction.next,
                       validator: (v) {
-                        if (v == null || v.isEmpty) return 'Informe as horas';
+                        if (v == null || v.isEmpty) return null;
                         final n = int.tryParse(v);
-                        if (n == null || n < 0) return 'Horas inválidas';
+                        if (n == null || n < 0 || n > 23) return 'Horas inválidas';
                         return null;
                       },
                     ),
@@ -283,11 +312,12 @@ class _EditMedPageState extends State<EditMedPage> {
                       ),
                       keyboardType: TextInputType.number,
                       validator: (v) {
-                        if (v == null || v.isEmpty) return 'Informe os minutos';
+                        if (v == null || v.isEmpty) return null;
                         final n = int.tryParse(v);
                         if (n == null || n < 0 || n > 59) return 'Minutos inválidos';
+                        final d = int.tryParse(_daysCtrl.text) ?? 0;
                         final h = int.tryParse(_hoursCtrl.text) ?? 0;
-                        if (h == 0 && n == 0) return 'Intervalo não pode ser 0';
+                        if (d == 0 && h == 0 && n == 0) return 'Intervalo não pode ser 0';
                         return null;
                       },
                     ),
@@ -302,8 +332,8 @@ class _EditMedPageState extends State<EditMedPage> {
               ),
               const SizedBox(height: 8),
               const Text(
-                'Ao desarquivar um medicamento lembre de colocar em ON o alerta na tela inicial',
-                style: TextStyle(fontSize: 14, color: Colors.redAccent, fontStyle: FontStyle.italic),
+                'OBS.: Ao desarquivar um medicamento lembre de preencher novamente data e hora de início, além de trocar o alerta de OFF para ON na tela inicial',
+                style: TextStyle(fontSize: 14, color: Colors.redAccent, fontStyle: FontStyle.italic, fontWeight: FontWeight.w700),
               ),
               const Divider(height: 32),
               const Text('Arquivamento automático (opcional)', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
