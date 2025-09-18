@@ -15,17 +15,50 @@ class HomePage extends StatefulWidget {
   State<HomePage> createState() => _HomePageState();
 }
 
-class _HomePageState extends State<HomePage> {
-  final _vm = Get.put(MedListViewModel(), permanent: true);
-  final Stream<DateTime> _tick = Stream.periodic(const Duration(seconds: 1), (_) => DateTime.now()).asBroadcastStream();
+class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
+  late final MedListViewModel _vm;
+  final Stream<DateTime> _tick =
+  Stream.periodic(const Duration(seconds: 1), (_) => DateTime.now()).asBroadcastStream();
+
+  Timer? _minuteRefresh;
+  Timer? _rxNudge;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+
+    _vm = Get.isRegistered<MedListViewModel>()
+        ? Get.find<MedListViewModel>()
+        : Get.put(MedListViewModel(), permanent: true);
+
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       await _vm.init();
       if (mounted) setState(() {});
     });
+
+    _minuteRefresh = Timer.periodic(const Duration(minutes: 1), (_) async {
+      await _refresh();
+    });
+
+    _rxNudge = Timer.periodic(const Duration(seconds: 5), (_) {
+      if (mounted) _vm.meds.refresh();
+    });
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _minuteRefresh?.cancel();
+    _rxNudge?.cancel();
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _refresh();
+    }
   }
 
   String _formatNext(DateTime dt) {
@@ -35,7 +68,10 @@ class _HomePageState extends State<HomePage> {
 
   Future<void> _refresh() async {
     await _vm.init();
-    if (mounted) setState(() {});
+    if (mounted) {
+      _vm.meds.refresh();
+      setState(() {});
+    }
   }
 
   Future<void> _openAdd() async {
@@ -68,7 +104,6 @@ class _HomePageState extends State<HomePage> {
   List<Widget> _buildActions(BuildContext context) {
     final w = MediaQuery.sizeOf(context).width;
 
-    // Muito estreito: só Adicionar + menu
     if (w < 430) {
       return [
         IconButton(tooltip: 'Adicionar', icon: const Icon(Icons.add), onPressed: _openAdd),
@@ -91,7 +126,6 @@ class _HomePageState extends State<HomePage> {
       ];
     }
 
-    // Médio: ícones compactos
     if (w < 560) {
       return [
         IconButton(tooltip: 'Adicionar', icon: const Icon(Icons.add), onPressed: _openAdd),
@@ -101,7 +135,6 @@ class _HomePageState extends State<HomePage> {
       ];
     }
 
-    // Largo
     return [
       TextButton.icon(onPressed: _openAdd, icon: const Icon(Icons.add), label: const Text('Adicionar')),
       IconButton(tooltip: 'Arquivados', icon: const Icon(Icons.archive_outlined), onPressed: _openArchived),
@@ -156,6 +189,7 @@ class _HomePageState extends State<HomePage> {
                           final now = snap.data ?? DateTime.now();
                           final next = vm.nextGrid(m);
                           final nextStr = _formatNext(next);
+                          final countdownWhen = vm.nextFireTime(m, now: now);
 
                           int? attentionIndex;
                           Duration? bestDiff;
@@ -257,7 +291,7 @@ class _HomePageState extends State<HomePage> {
                                         ),
                                       ),
                                       const SizedBox(width: 12),
-                                      _CountdownBadge(nextWhen: next),
+                                      _CountdownBadge(nextWhen: countdownWhen),
                                     ],
                                   ),
                                   const SizedBox(height: 12),
@@ -285,6 +319,43 @@ class _ActionButtonsGrid extends StatelessWidget {
   final MedListViewModel vm;
   const _ActionButtonsGrid({required this.m, required this.vm});
 
+  Future<bool> _confirm(BuildContext context, {required String title, required String message, bool destructive = false}) async {
+    final cs = Theme.of(context).colorScheme;
+    final result = await Get.dialog<bool>(
+      AlertDialog(
+        title: Text(title),
+        content: Text(message),
+        actions: [
+          TextButton(onPressed: () => Get.back(result: false), child: const Text('Não')),
+          TextButton(
+            onPressed: () => Get.back(result: true),
+            style: destructive ? TextButton.styleFrom(foregroundColor: cs.error) : null,
+            child: const Text('Sim'),
+          ),
+        ],
+      ),
+      barrierDismissible: false,
+    );
+    if (result != null) return result;
+    final fallback = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        title: Text(title),
+        content: Text(message),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('Não')),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            style: destructive ? TextButton.styleFrom(foregroundColor: cs.error) : null,
+            child: const Text('Sim'),
+          ),
+        ],
+      ),
+    );
+    return fallback == true;
+  }
+
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
@@ -300,10 +371,36 @@ class _ActionButtonsGrid extends StatelessWidget {
 
     final children = <Widget>[
       FilledButton.icon(
-        onPressed: m.id == null ? null : () => vm.markTaken(m.id!),
+        onPressed: m.id == null
+            ? null
+            : () async {
+          final ok = await _confirm(
+            context,
+            title: 'Confirmar',
+            message: 'Marcar a dose de "${m.name}" como tomada agora?',
+          );
+          if (!ok) return;
+          await vm.markTaken(m.id!);
+        },
         icon: const Icon(Icons.check),
         label: const Text('Tomei agora'),
         style: filledStyle,
+      ),
+      OutlinedButton.icon(
+        onPressed: m.id == null
+            ? null
+            : () async {
+          final ok = await _confirm(
+            context,
+            title: 'Confirmar',
+            message: 'Pular a próxima dose de "${m.name}"?',
+          );
+          if (!ok) return;
+          await vm.skipNext(m.id!);
+        },
+        icon: const Icon(Icons.skip_next),
+        label: const Text('Pular'),
+        style: outlinedStyle,
       ),
       OutlinedButton.icon(
         onPressed: m.id == null
@@ -323,12 +420,6 @@ class _ActionButtonsGrid extends StatelessWidget {
         },
         icon: const Icon(Icons.schedule_send),
         label: const Text('Adiar'),
-        style: outlinedStyle,
-      ),
-      OutlinedButton.icon(
-        onPressed: m.id == null ? null : () => vm.skipNext(m.id!),
-        icon: const Icon(Icons.skip_next),
-        label: const Text('Pular'),
         style: outlinedStyle,
       ),
       OutlinedButton.icon(
@@ -354,7 +445,18 @@ class _ActionButtonsGrid extends StatelessWidget {
         style: outlinedStyle,
       ),
       OutlinedButton.icon(
-        onPressed: m.id == null ? null : () => vm.remove(m.id!),
+        onPressed: m.id == null
+            ? null
+            : () async {
+          final ok = await _confirm(
+            context,
+            title: 'Excluir',
+            message: 'Tem certeza que deseja excluir "${m.name}"? Esta ação não pode ser desfeita.',
+            destructive: true,
+          );
+          if (!ok) return;
+          await vm.remove(m.id!);
+        },
         icon: const Icon(Icons.delete_outline),
         label: const Text('Excluir'),
         style: deleteStyle,
@@ -364,7 +466,6 @@ class _ActionButtonsGrid extends StatelessWidget {
     return LayoutBuilder(
       builder: (context, c) {
         const spacing = 8.0;
-        // 2 colunas fixas, 3 linhas (6 itens)
         final cellWidth = (c.maxWidth - spacing) / 2;
         const cellHeight = 48.0;
         final aspect = cellWidth / cellHeight;
@@ -392,15 +493,17 @@ class _CountdownBadge extends StatefulWidget {
 }
 
 class _CountdownBadgeState extends State<_CountdownBadge> {
-  final Stream<DateTime> _tick = Stream.periodic(const Duration(seconds: 1), (_) => DateTime.now()).asBroadcastStream();
+  final Stream<DateTime> _tick =
+  Stream.periodic(const Duration(seconds: 1), (_) => DateTime.now()).asBroadcastStream();
 
   String _fmt(Duration diff) {
     String two(int n) => n.toString().padLeft(2, '0');
-    if (diff.isNegative) return '00:00:00';
-    final h = diff.inHours;
-    final m = diff.inMinutes % 60;
-    final s = diff.inSeconds % 60;
-    return '${two(h)}:${two(m)}:${two(s)}';
+    if (diff.isNegative) return '0d 0h 00m';
+    final totalMinutes = ((diff.inSeconds + 59) ~/ 60);
+    final d = totalMinutes ~/ (24 * 60);
+    final h = (totalMinutes % (24 * 60)) ~/ 60;
+    final m = totalMinutes % 60;
+    return '${d}d ${h}h ${two(m)}m';
   }
 
   @override

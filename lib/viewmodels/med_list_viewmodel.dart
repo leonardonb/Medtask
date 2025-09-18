@@ -1,4 +1,5 @@
 import 'dart:math';
+import 'dart:async';
 import 'package:get/get.dart';
 import 'package:sqflite/sqflite.dart';
 import '../core/notification_service.dart';
@@ -10,6 +11,21 @@ class MedListViewModel extends GetxController {
   final RxList<Medication> meds = <Medication>[].obs;
   final MedRepository _repo = MedRepository();
   int _lastSweepMs = 0;
+  Timer? _sweepTimer;
+
+  @override
+  void onInit() {
+    super.onInit();
+    _sweepTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      tickAutoArchive();
+    });
+  }
+
+  @override
+  void onClose() {
+    _sweepTimer?.cancel();
+    super.onClose();
+  }
 
   Future<void> init() async {
     final db = await AppDb.instance;
@@ -167,6 +183,7 @@ class MedListViewModel extends GetxController {
       if (meds.any((e) => e.id == newId)) {
         await _scheduleFor(saved);
       }
+      meds.refresh();
     } else {
       await _repo.update(med);
       await _autoArchiveSweep(db);
@@ -175,6 +192,7 @@ class MedListViewModel extends GetxController {
       if (current != null) {
         await _scheduleFor(current);
       }
+      meds.refresh();
     }
   }
 
