@@ -1,12 +1,16 @@
-import 'dart:ui';
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
+
 import '../../viewmodels/med_list_viewmodel.dart';
 import '../../models/medication.dart';
+import '../../models/dose_log.dart';
+import '../../data/repositories/dose_repository.dart';
+
 import 'edit_med_page.dart';
 import '../../features/settings/settings_page.dart';
 import 'archived_meds_page.dart';
+import 'dose_history_page.dart';
 import 'about/about_page.dart';
 
 class HomePage extends StatefulWidget {
@@ -17,13 +21,15 @@ class HomePage extends StatefulWidget {
 
 class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   late final MedListViewModel _vm;
-  final Stream<DateTime> _tick =
-  Stream.periodic(const Duration(seconds: 1), (_) => DateTime.now()).asBroadcastStream();
+  final DoseRepository _doseRepo = DoseRepository();
 
   Timer? _minuteRefresh;
   Timer? _rxNudge;
 
   late DateTime _selectedDate;
+
+  final Map<String, DoseStatus> _statusCache = {};
+  bool _statusLoading = false;
 
   @override
   void initState() {
@@ -38,6 +44,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       await _vm.init();
+      await _prefetchStatusesForSelectedDay();
       if (mounted) setState(() {});
     });
 
@@ -65,376 +72,481 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     }
   }
 
-  DateTime _dateOnly(DateTime d) => DateTime(d.year, d.month, d.day);
-
-  String _formatNext(DateTime dt) {
-    String two(int n) => n.toString().padLeft(2, '0');
-    return '${two(dt.day)}/${two(dt.month)}/${dt.year} ${two(dt.hour)}:${two(dt.minute)}';
+  Future<void> _refresh() async {
+    await _vm.reload();
+    await _prefetchStatusesForSelectedDay();
+    if (mounted) setState(() {});
   }
 
-  Future<void> _refresh() async {
-    await _vm.init();
-    if (mounted) {
-      _vm.meds.refresh();
-      setState(() {});
+  DateTime _dateOnly(DateTime d) => DateTime(d.year, d.month, d.day);
+
+  String _key(int medId, DateTime scheduledAt) =>
+      '$medId|${scheduledAt.millisecondsSinceEpoch}';
+
+  bool _sameDay(DateTime a, DateTime b) =>
+      a.year == b.year && a.month == b.month && a.day == b.day;
+
+  DateTimeRange _dayRange(DateTime day) {
+    final start = DateTime(day.year, day.month, day.day);
+    final end = start.add(const Duration(days: 1));
+    return DateTimeRange(start: start, end: end);
+  }
+
+  List<DateTime> _occurrencesOnDate(Medication m, DateTime day) {
+    final range = _dayRange(day);
+    final start = range.start;
+    final end = range.end;
+
+    final intervalMin = m.intervalMinutes;
+    if (intervalMin <= 0) return const [];
+
+    final step = Duration(minutes: intervalMin);
+
+    // Se o medicamento só começa depois do final do dia, não tem ocorrências.
+    final first = m.firstDose;
+    if (first.isAfter(end)) return const [];
+
+    // Encontrar a primeira ocorrência >= start
+    DateTime t = first;
+
+    if (t.isBefore(start)) {
+      final diffMin = start.difference(t).inMinutes;
+      final k = diffMin ~/ step.inMinutes;
+      t = t.add(Duration(minutes: step.inMinutes * k));
+      while (t.isBefore(start)) {
+        t = t.add(step);
+      }
+    }
+
+    // Coletar ocorrências até end (cap defensivo)
+    final out = <DateTime>[];
+    int guard = 0;
+    while (t.isBefore(end) && guard < 200) {
+      out.add(t);
+      t = t.add(step);
+      guard++;
+    }
+    return out;
+  }
+
+  Future<void> _prefetchStatusesForSelectedDay() async {
+    if (_statusLoading) return;
+    _statusLoading = true;
+
+    try {
+      final meds = _vm.meds.toList();
+      final now = DateTime.now();
+      final sel = _selectedDate;
+
+      for (final m in meds) {
+        if (m.id == null) continue;
+
+        final occs = _occurrencesOnDate(m, sel);
+        for (final occ in occs) {
+          // você quer ícone padrão para futura, então não precisa status para futuro
+          if (occ.isAfter(now)) continue;
+
+          final k = _key(m.id!, occ);
+          if (_statusCache.containsKey(k)) continue;
+
+          final st = await _doseRepo.getEventStatus(m.id!, occ);
+          if (st != null) {
+            _statusCache[k] = st;
+          }
+        }
+      }
+    } finally {
+      _statusLoading = false;
     }
   }
 
   Future<void> _openAdd() async {
-    final r = await Get.to(() => const EditMedPage());
-    if (r == true) {
-      await _refresh();
-    } else if (r is Map && r['refresh'] == true) {
-      if (r['ensureEnabledId'] is int && r['shouldBeEnabled'] == true) {
-        await _vm.toggleEnabled(r['ensureEnabledId'] as int, true);
-      }
-      await _refresh();
-    }
+    await Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const EditMedPage()),
+    );
+    await _refresh();
   }
 
-  Future<void> _openArchived() async {
-    final r = await Get.to(() => const ArchivedMedsPage());
-    if (r == true) {
-      await _refresh();
-    } else if (r is Map && r['refresh'] == true) {
-      if (r['ensureEnabledId'] is int && r['shouldBeEnabled'] == true) {
-        await _vm.toggleEnabled(r['ensureEnabledId'] as int, true);
-      }
-      await _refresh();
-    }
+  Future<void> _openEdit(Medication m) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => EditMedPage(existing: m)),
+    );
+    await _refresh();
   }
 
-  void _openInfo() => Get.to(() => const AboutPage());
-  void _openSettings() => Get.to(() => const SettingsPage());
-
-  PreferredSizeWidget _buildAppBar(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return AppBar(
-      title: const Text('Meus Remédios', overflow: TextOverflow.ellipsis, softWrap: false),
-      centerTitle: false,
-      titleSpacing: 8,
-      actions: _buildActions(context),
-      flexibleSpace: Container(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            colors: [cs.primary.withOpacity(0.16), cs.secondary.withOpacity(0.10), cs.surface],
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-          ),
-        ),
-      ),
+  void _openSettings() {
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const SettingsPage()),
     );
   }
 
-  List<Widget> _buildActions(BuildContext context) {
-    final w = MediaQuery.sizeOf(context).width;
+  void _openArchived() {
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const ArchivedMedsPage()),
+    );
+  }
 
-    if (w < 430) {
+  void _openInfo() {
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const AboutPage()),
+    );
+  }
+
+  void _openHistory() {
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const DoseHistoryPage()),
+    );
+  }
+
+  Future<bool> _confirm(
+      BuildContext context, {
+        required String title,
+        required String message,
+      }) async {
+    final res = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: Text(title),
+        content: Text(message),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+    return res ?? false;
+  }
+
+  List<Widget> _buildTopActions(double w) {
+    if (w >= 560) {
       return [
-        IconButton(tooltip: 'Adicionar', icon: const Icon(Icons.add_circle_rounded), onPressed: _openAdd),
+        IconButton(
+          tooltip: 'Adicionar',
+          icon: const Icon(Icons.add_circle_rounded),
+          onPressed: _openAdd,
+        ),
         PopupMenuButton<String>(
           tooltip: 'Mais opções',
           icon: const Icon(Icons.more_vert_rounded),
           onSelected: (v) {
             switch (v) {
-              case 'archived': _openArchived(); break;
-              case 'info': _openInfo(); break;
-              case 'settings': _openSettings(); break;
+              case 'archived':
+                _openArchived();
+                break;
+              case 'history':
+                _openHistory();
+                break;
+              case 'info':
+                _openInfo();
+                break;
+              case 'settings':
+                _openSettings();
+                break;
             }
           },
           itemBuilder: (_) => const [
-            PopupMenuItem(value: 'archived', child: ListTile(leading: Icon(Icons.archive_outlined), title: Text('Arquivados'))),
-            PopupMenuItem(value: 'info', child: ListTile(leading: Icon(Icons.info_outline), title: Text('Informações'))),
-            PopupMenuItem(value: 'settings', child: ListTile(leading: Icon(Icons.settings), title: Text('Configurações'))),
+            PopupMenuItem(
+              value: 'archived',
+              child: ListTile(
+                leading: Icon(Icons.archive_outlined),
+                title: Text('Arquivados'),
+              ),
+            ),
+            PopupMenuItem(
+              value: 'history',
+              child: ListTile(
+                leading: Icon(Icons.history_rounded),
+                title: Text('Histórico'),
+              ),
+            ),
+            PopupMenuItem(
+              value: 'info',
+              child: ListTile(
+                leading: Icon(Icons.info_outline),
+                title: Text('Informações'),
+              ),
+            ),
+            PopupMenuItem(
+              value: 'settings',
+              child: ListTile(
+                leading: Icon(Icons.settings),
+                title: Text('Configurações'),
+              ),
+            ),
           ],
         ),
       ];
     }
 
-    if (w < 560) {
-      return [
-        IconButton(tooltip: 'Adicionar', icon: const Icon(Icons.add_circle_rounded), onPressed: _openAdd),
-        IconButton(tooltip: 'Arquivados', icon: const Icon(Icons.archive_outlined), onPressed: _openArchived),
-        IconButton(tooltip: 'Informações', icon: const Icon(Icons.info_outline), onPressed: _openInfo),
-        IconButton(tooltip: 'Configurações', icon: const Icon(Icons.settings), onPressed: _openSettings),
-      ];
-    }
-
     return [
-      TextButton.icon(onPressed: _openAdd, icon: const Icon(Icons.add_circle_rounded), label: const Text('Adicionar')),
-      IconButton(tooltip: 'Arquivados', icon: const Icon(Icons.archive_outlined), onPressed: _openArchived),
-      IconButton(tooltip: 'Informações', icon: const Icon(Icons.info_outline), onPressed: _openInfo),
-      IconButton(tooltip: 'Configurações', icon: const Icon(Icons.settings), onPressed: _openSettings),
+      IconButton(
+        tooltip: 'Adicionar',
+        icon: const Icon(Icons.add_circle_rounded),
+        onPressed: _openAdd,
+      ),
+      IconButton(
+        tooltip: 'Arquivados',
+        icon: const Icon(Icons.archive_outlined),
+        onPressed: _openArchived,
+      ),
+      IconButton(
+        tooltip: 'Histórico',
+        icon: const Icon(Icons.history_rounded),
+        onPressed: _openHistory,
+      ),
+      IconButton(
+        tooltip: 'Informações',
+        icon: const Icon(Icons.info_outline),
+        onPressed: _openInfo,
+      ),
+      IconButton(
+        tooltip: 'Configurações',
+        icon: const Icon(Icons.settings),
+        onPressed: _openSettings,
+      ),
     ];
   }
 
-  @override
-  Widget build(BuildContext context) {
-    final vm = _vm;
+  IconData _statusIcon(DoseStatus s) {
+    switch (s) {
+      case DoseStatus.taken:
+        return Icons.check_circle_rounded;
+      case DoseStatus.skipped:
+        return Icons.fast_forward_rounded;
+      case DoseStatus.missed:
+        return Icons.cancel_rounded;
+    }
+  }
 
-    return Scaffold(
-      appBar: _buildAppBar(context),
-      body: Container(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            colors: [Theme.of(context).colorScheme.surface, Theme.of(context).colorScheme.surfaceContainerHighest.withOpacity(0.5)],
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-          ),
-        ),
-        child: LayoutBuilder(
-          builder: (context, _) {
-            return Align(
-              alignment: Alignment.topCenter,
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 720),
-                child: Obx(() {
-                  return Column(
-                    children: [
-                      const SizedBox(height: 6),
-                      _DateStrip(
-                        selected: _selectedDate,
-                        onChanged: (d) => setState(() => _selectedDate = _dateOnly(d)),
-                      ),
-                      Expanded(
-                        child: vm.meds.isEmpty
-                            ? RefreshIndicator(
-                          onRefresh: _refresh,
-                          color: Theme.of(context).colorScheme.primary,
-                          child: ListView(
-                            physics: const AlwaysScrollableScrollPhysics(),
-                            children: [
-                              const SizedBox(height: 120),
-                              Icon(Icons.medication_liquid_rounded, size: 48, color: Theme.of(context).colorScheme.primary),
-                              const SizedBox(height: 12),
-                              const Center(child: Text('Nenhum remédio. Toque + para adicionar.')),
-                            ],
-                          ),
-                        )
-                            : RefreshIndicator(
-                          onRefresh: _refresh,
-                          color: Theme.of(context).colorScheme.primary,
-                          child: StreamBuilder<DateTime>(
-                            stream: _tick,
-                            initialData: DateTime.now(),
-                            builder: (context, ts) {
-                              final now = ts.data ?? DateTime.now();
+  String _statusLabel(DoseStatus s) {
+    switch (s) {
+      case DoseStatus.taken:
+        return 'Tomada';
+      case DoseStatus.skipped:
+        return 'Pulada';
+      case DoseStatus.missed:
+        return 'Esquecida';
+    }
+  }
 
-                              final filtered = <_MedEntry>[];
-                              for (final m in vm.meds) {
-                                final when = _firstOccurrenceOnDate(m, _selectedDate);
-                                if (when != null) filtered.add(_MedEntry(m, when));
-                              }
+  Color _statusColor(BuildContext context, DoseStatus s) {
+    final cs = Theme.of(context).colorScheme;
+    switch (s) {
+      case DoseStatus.taken:
+        return cs.tertiary;
+      case DoseStatus.skipped:
+        return cs.primary;
+      case DoseStatus.missed:
+        return cs.error;
+    }
+  }
 
-                              filtered.sort((a, b) => a.when.compareTo(b.when));
+  Color _statusBgColor(BuildContext context, DoseStatus s) {
+    final cs = Theme.of(context).colorScheme;
+    switch (s) {
+      case DoseStatus.taken:
+        return cs.tertiaryContainer;
+      case DoseStatus.skipped:
+        return cs.primaryContainer;
+      case DoseStatus.missed:
+        return cs.errorContainer;
+    }
+  }
 
-                              if (filtered.isEmpty) {
-                                return ListView(
-                                  padding: const EdgeInsets.fromLTRB(12, 24, 12, 24),
-                                  children: const [
-                                    SizedBox(height: 12),
-                                    Center(child: Text('Sem doses para esta data.')),
-                                  ],
-                                );
-                              }
+  Color _statusOnBgColor(BuildContext context, DoseStatus s) {
+    final cs = Theme.of(context).colorScheme;
+    switch (s) {
+      case DoseStatus.taken:
+        return cs.onTertiaryContainer;
+      case DoseStatus.skipped:
+        return cs.onPrimaryContainer;
+      case DoseStatus.missed:
+        return cs.onErrorContainer;
+    }
+  }
 
-                              return ListView.separated(
-                                padding: const EdgeInsets.fromLTRB(12, 12, 12, 24),
-                                itemCount: filtered.length,
-                                separatorBuilder: (_, __) => const SizedBox(height: 12),
-                                itemBuilder: (_, i) {
-                                  final entry = filtered[i];
-                                  final m = entry.med;
-                                  final occ = entry.when;
-                                  final nextStr = _formatNext(occ);
-
-                                  final isToday = _dateOnly(now) == _selectedDate;
-                                  final countdownWhen = occ;
-
-                                  final cs = Theme.of(context).colorScheme;
-                                  final isLate = isToday ? !occ.isAfter(now) : false;
-
-                                  final bg = isLate ? cs.errorContainer : cs.surface;
-                                  final border = isLate ? cs.error : cs.primary.withOpacity(0.25);
-                                  final titleColor = isLate ? cs.onErrorContainer : cs.onSurface;
-                                  final subColor = isLate ? cs.onErrorContainer : Theme.of(context).textTheme.bodyMedium?.color;
-
-                                  return _MedCard(
-                                    onTap: () async {
-                                      await showModalBottomSheet(
-                                        context: context,
-                                        showDragHandle: true,
-                                        isScrollControlled: true,
-                                        builder: (_) => _ActionsSheet(m: m, vm: vm),
-                                      );
-                                    },
-                                    bg: bg,
-                                    border: border,
-                                    titleColor: titleColor,
-                                    subColor: subColor,
-                                    name: m.name,
-                                    nextStr: nextStr,
-                                    nextWhen: countdownWhen,
-                                    lateBadge: isLate,
-                                    enabled: m.enabled,
-                                    showCountdown: isToday,
-                                  );
-                                },
-                              );
-                            },
-                          ),
-                        ),
-                      ),
-                    ],
-                  );
-                }),
-              ),
-            );
-          },
+  Widget _statusChip(BuildContext context, DoseStatus s) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: _statusBgColor(context, s),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        _statusLabel(s),
+        style: Theme.of(context).textTheme.labelMedium?.copyWith(
+          color: _statusOnBgColor(context, s),
+          fontWeight: FontWeight.w700,
         ),
       ),
     );
   }
 
-  DateTime? _firstOccurrenceOnDate(Medication m, DateTime day) {
-    final int stepMin = m.intervalMinutes <= 0 ? 1 : m.intervalMinutes;
-    final step = Duration(minutes: stepMin);
-    if (m.firstDose == null) return null;
-    final origin = m.firstDose;
-    final dayStart = DateTime(day.year, day.month, day.day);
-    final dayEnd = dayStart.add(const Duration(days: 1));
-    if (origin.isAfter(dayEnd)) return null;
-    Duration diff = dayStart.difference(origin);
-    int k;
-    if (diff.isNegative) {
-      k = 0;
-    } else {
-      final minutes = diff.inMinutes;
-      k = (minutes + step.inMinutes - 1) ~/ step.inMinutes;
-    }
-    final candidate = origin.add(Duration(minutes: k * step.inMinutes));
-    if (candidate.isBefore(dayEnd)) {
-      return candidate;
-    }
-    return null;
-  }
-}
-
-class _MedEntry {
-  final Medication med;
-  final DateTime when;
-  _MedEntry(this.med, this.when);
-}
-
-class _DateStrip extends StatefulWidget {
-  final DateTime selected;
-  final ValueChanged<DateTime> onChanged;
-  const _DateStrip({required this.selected, required this.onChanged, super.key});
-
-  @override
-  State<_DateStrip> createState() => _DateStripState();
-}
-
-class _DateStripState extends State<_DateStrip> {
-  final _controller = ScrollController();
-  static const _pastDays = 30;
-  static const _futureDays = 60;
-
-  static const List<String> _wd1 = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sab'];
-
-  @override
-  void didUpdateWidget(covariant _DateStrip oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.selected != widget.selected) {
-      WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToSelected());
-    }
-  }
-
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToSelected());
-  }
-
-  void _scrollToSelected() {
-    final today = DateTime.now();
-    final base = DateTime(today.year, today.month, today.day);
-    final sel = DateTime(widget.selected.year, widget.selected.month, widget.selected.day);
-    final index = _pastDays + sel.difference(base).inDays;
-    const itemExtent = 72.0;
-    final offset = (index - 2).clamp(0, _pastDays + _futureDays).toDouble() * itemExtent;
-    _controller.animateTo(offset, duration: const Duration(milliseconds: 300), curve: Curves.easeOut);
-  }
+  String _hhmm(DateTime t) =>
+      '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    final today = DateTime.now();
-    final base = DateTime(today.year, today.month, today.day);
+    final w = MediaQuery.of(context).size.width;
+    final theme = Theme.of(context);
+    final now = DateTime.now();
 
-    return Material(
-      color: Colors.transparent,
-      child: SizedBox(
-        height: 84,
-        child: Row(
-          children: [
-            IconButton(
-              tooltip: 'Dia anterior',
-              icon: const Icon(Icons.chevron_left_rounded),
-              onPressed: () => widget.onChanged(widget.selected.subtract(const Duration(days: 1))),
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('MedTask'),
+        actions: _buildTopActions(w),
+      ),
+      body: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
+            child: _DateStrip(
+              selected: _selectedDate,
+              onSelect: (d) async {
+                setState(() => _selectedDate = d);
+                await _prefetchStatusesForSelectedDay();
+                if (mounted) setState(() {});
+              },
+              dateOnly: _dateOnly,
             ),
-            Expanded(
-              child: ListView.builder(
-                controller: _controller,
-                scrollDirection: Axis.horizontal,
-                itemExtent: 72,
-                itemCount: _pastDays + _futureDays + 1,
-                padding: const EdgeInsets.symmetric(horizontal: 4),
-                itemBuilder: (context, i) {
-                  final date = base.add(Duration(days: i - _pastDays));
-                  final isSelected = date.year == widget.selected.year &&
-                      date.month == widget.selected.month &&
-                      date.day == widget.selected.day;
-                  final isToday = date == DateTime(base.year, base.month, base.day);
+          ),
+          Expanded(
+            child: Obx(() {
+              final meds = _vm.meds.toList();
 
-                  final bg = isSelected
-                      ? cs.primary
-                      : isToday
-                      ? cs.secondaryContainer
-                      : cs.surfaceContainerHighest;
-                  final fg = isSelected
-                      ? cs.onPrimary
-                      : isToday
-                      ? cs.onSecondaryContainer
-                      : Theme.of(context).textTheme.bodyMedium?.color;
+              // lista achatada de doses do dia: (med, occ)
+              final slots = <_DoseSlot>[];
+              for (final m in meds) {
+                final occs = _occurrencesOnDate(m, _selectedDate);
+                for (final occ in occs) {
+                  slots.add(_DoseSlot(med: m, scheduledAt: occ));
+                }
+              }
 
-                  final wd = _wd1[date.weekday % 7];
+              slots.sort((a, b) => a.scheduledAt.compareTo(b.scheduledAt));
 
-                  return Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 10),
+              if (slots.isEmpty) {
+                return Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(20),
+                    child: Text(
+                      'Nenhuma dose para este dia.\nToque em Adicionar para cadastrar um remédio.',
+                      textAlign: TextAlign.center,
+                      style: theme.textTheme.bodyLarge,
+                    ),
+                  ),
+                );
+              }
+
+              return ListView.builder(
+                padding: const EdgeInsets.fromLTRB(12, 8, 12, 24),
+                itemCount: slots.length,
+                itemBuilder: (_, i) {
+                  final slot = slots[i];
+                  final m = slot.med;
+                  final occ = slot.scheduledAt;
+
+                  final isFuture = occ.isAfter(now);
+                  DoseStatus? status;
+
+                  if (!isFuture && m.id != null) {
+                    status = _statusCache[_key(m.id!, occ)];
+                  }
+
+                  final isToday = _sameDay(_selectedDate, _dateOnly(now));
+                  final overdue = isToday && !isFuture && status == null;
+
+                  IconData leadingIcon = Icons.medication_rounded;
+                  Color leadingBg = theme.colorScheme.primaryContainer;
+                  Color leadingFg = theme.colorScheme.onPrimaryContainer;
+
+                  if (status != null) {
+                    leadingIcon = _statusIcon(status);
+                    leadingBg = _statusBgColor(context, status);
+                    leadingFg = _statusColor(context, status);
+                  } else if (overdue) {
+                    leadingIcon = Icons.priority_high_rounded;
+                    leadingBg = theme.colorScheme.errorContainer;
+                    leadingFg = theme.colorScheme.onErrorContainer;
+                  } else {
+                    // futuro: ícone padrão
+                    leadingIcon = Icons.medication_rounded;
+                    leadingBg = theme.colorScheme.primaryContainer;
+                    leadingFg = theme.colorScheme.onPrimaryContainer;
+                  }
+
+                  return Card(
+                    elevation: 0,
+                    clipBehavior: Clip.antiAlias,
                     child: InkWell(
-                      borderRadius: BorderRadius.circular(12),
-                      onTap: () => widget.onChanged(date),
-                      child: AnimatedContainer(
-                        duration: const Duration(milliseconds: 200),
-                        curve: Curves.easeOut,
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                        decoration: BoxDecoration(
-                          color: bg,
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: isSelected ? cs.primary : cs.outlineVariant, width: isSelected ? 2 : 1),
-                        ),
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
+                      onTap: () => _openEdit(m),
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+                        child: Row(
                           children: [
-                            Text(
-                              wd,
-                              style: Theme.of(context).textTheme.labelSmall?.copyWith(color: fg, fontWeight: FontWeight.w700),
+                            Container(
+                              width: 44,
+                              height: 44,
+                              decoration: BoxDecoration(
+                                color: leadingBg,
+                                borderRadius: BorderRadius.circular(14),
+                              ),
+                              child: Icon(leadingIcon, color: leadingFg),
                             ),
-                            const SizedBox(height: 2),
-                            Text(
-                              '${date.day}',
-                              style: Theme.of(context).textTheme.titleSmall?.copyWith(color: fg, fontWeight: FontWeight.w900),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    m.name,
+                                    style: theme.textTheme.titleMedium?.copyWith(
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Row(
+                                    children: [
+                                      Expanded(
+                                        child: Text(
+                                          'Dose: ${_hhmm(occ)} • Intervalo: ${m.intervalMinutes} min',
+                                          style: theme.textTheme.bodyMedium,
+                                        ),
+                                      ),
+                                      if (status != null) _statusChip(context, status),
+                                      if (overdue) ...[
+                                        const SizedBox(width: 8),
+                                        Container(
+                                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                                          decoration: BoxDecoration(
+                                            color: theme.colorScheme.errorContainer,
+                                            borderRadius: BorderRadius.circular(999),
+                                          ),
+                                          child: Text(
+                                            'Atrasado',
+                                            style: theme.textTheme.labelMedium?.copyWith(
+                                              color: theme.colorScheme.onErrorContainer,
+                                              fontWeight: FontWeight.w700,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ],
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            IconButton(
+                              tooltip: 'Ações',
+                              icon: const Icon(Icons.more_horiz_rounded),
+                              onPressed: () => _openActions(m),
                             ),
                           ],
                         ),
@@ -442,505 +554,183 @@ class _DateStripState extends State<_DateStrip> {
                     ),
                   );
                 },
-              ),
-            ),
-            IconButton(
-              tooltip: 'Próximo dia',
-              icon: const Icon(Icons.chevron_right_rounded),
-              onPressed: () => widget.onChanged(widget.selected.add(const Duration(days: 1))),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _MedCard extends StatelessWidget {
-  final VoidCallback onTap;
-  final Color bg;
-  final Color border;
-  final Color? titleColor;
-  final Color? subColor;
-  final String name;
-  final String nextStr;
-  final DateTime nextWhen;
-  final bool lateBadge;
-  final bool enabled;
-  final bool showCountdown;
-
-  const _MedCard({
-    required this.onTap,
-    required this.bg,
-    required this.border,
-    required this.titleColor,
-    required this.subColor,
-    required this.name,
-    required this.nextStr,
-    required this.nextWhen,
-    required this.lateBadge,
-    required this.enabled,
-    required this.showCountdown,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    final w = MediaQuery.sizeOf(context).width;
-    final compact = w < 360;
-
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 250),
-      curve: Curves.easeOut,
-      decoration: BoxDecoration(
-        color: bg,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: border, width: 1.2),
-        boxShadow: [
-          BoxShadow(color: cs.shadow.withOpacity(0.05), blurRadius: 14, offset: const Offset(0, 6)),
-        ],
-      ),
-      child: Material(
-        type: MaterialType.transparency,
-        child: InkWell(
-          borderRadius: BorderRadius.circular(18),
-          onTap: onTap,
-          child: Padding(
-            padding: EdgeInsets.all(compact ? 10 : 14),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                Stack(
-                  clipBehavior: Clip.none,
-                  children: [
-                    CircleAvatar(
-                      radius: compact ? 20 : 22,
-                      backgroundColor: cs.primary.withOpacity(0.12),
-                      foregroundColor: cs.primary,
-                      child: const Icon(Icons.medication_rounded),
-                    ),
-                    Positioned(
-                      right: -2,
-                      bottom: -2,
-                      child: Container(
-                        padding: EdgeInsets.symmetric(horizontal: compact ? 5 : 6, vertical: 2),
-                        decoration: BoxDecoration(color: enabled ? cs.primary : cs.outline, borderRadius: BorderRadius.circular(8)),
-                        child: Text(
-                          enabled ? 'ON' : 'OFF',
-                          style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                            fontSize: compact ? 9 : null,
-                            color: cs.onPrimary,
-                            fontWeight: FontWeight.w800,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Expanded(
-                            child: Text(
-                              name,
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                              style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                                fontSize: compact ? 14 : null,
-                                fontWeight: FontWeight.w800,
-                                color: titleColor,
-                              ),
-                            ),
-                          ),
-                          if (lateBadge)
-                            Container(
-                              margin: const EdgeInsets.only(left: 8),
-                              padding: EdgeInsets.symmetric(horizontal: compact ? 6 : 8, vertical: 4),
-                              decoration: BoxDecoration(color: cs.error, borderRadius: BorderRadius.circular(8)),
-                              child: Text(
-                                'ATRASADO',
-                                style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                                  fontSize: compact ? 10 : null,
-                                  color: cs.onError,
-                                  fontWeight: FontWeight.w900,
-                                  letterSpacing: 1.0,
-                                ),
-                              ),
-                            ),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      Row(
-                        children: [
-                          Flexible(
-                            fit: FlexFit.tight,
-                            child: Container(
-                              padding: EdgeInsets.symmetric(horizontal: compact ? 6 : 8, vertical: compact ? 3 : 4),
-                              decoration: BoxDecoration(color: cs.secondaryContainer, borderRadius: BorderRadius.circular(8)),
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Icon(Icons.schedule_rounded, size: compact ? 14 : 16, color: cs.onSecondaryContainer),
-                                  const SizedBox(width: 6),
-                                  Flexible(
-                                    child: Text(
-                                      nextStr, // <<< usa o texto já formatado
-                                      overflow: TextOverflow.ellipsis,
-                                      style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                                        fontSize: compact ? 12 : null,
-                                        color: cs.onSecondaryContainer,
-                                        fontWeight: FontWeight.w700,
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          ConstrainedBox(
-                            constraints: BoxConstraints(
-                              maxWidth: compact ? 104 : 132,
-                              minWidth: compact ? 80 : 96,
-                            ),
-                            child: FittedBox(
-                              fit: BoxFit.scaleDown,
-                              alignment: Alignment.centerRight,
-                              child: showCountdown
-                                  ? _CountdownBadge(nextWhen: nextWhen)
-                                  : Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Icon(Icons.calendar_month_rounded, size: compact ? 16 : 18, color: cs.onSurfaceVariant),
-                                  const SizedBox(width: 6),
-                                  Text(
-                                    'Outra data',
-                                    style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                                      fontSize: compact ? 12 : null,
-                                      color: cs.onSurfaceVariant,
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _ActionsSheet extends StatelessWidget {
-  final Medication m;
-  final MedListViewModel vm;
-  const _ActionsSheet({required this.m, required this.vm});
-
-  Future<bool> _confirm(BuildContext context, {required String title, required String message, bool destructive = false}) async {
-    final cs = Theme.of(context).colorScheme;
-    final result = await Get.dialog<bool>(
-      AlertDialog(
-        title: Text(title),
-        content: Text(message),
-        actions: [
-          TextButton(onPressed: () => Get.back(result: false), child: const Text('Não')),
-          TextButton(
-            onPressed: () => Get.back(result: true),
-            style: destructive ? TextButton.styleFrom(foregroundColor: cs.error) : null,
-            child: const Text('Sim'),
+              );
+            }),
           ),
         ],
       ),
-      barrierDismissible: false,
+      floatingActionButton: FloatingActionButton(
+        onPressed: _openAdd,
+        child: const Icon(Icons.add_rounded),
+      ),
     );
-    if (result != null) return result;
-    final fallback = await showDialog<bool>(
+  }
+
+  void _openActions(Medication m) {
+    final vm = _vm;
+    showModalBottomSheet<void>(
       context: context,
-      barrierDismissible: false,
-      builder: (ctx) => AlertDialog(
-        title: Text(title),
-        content: Text(message),
-        actions: [
-          TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('Não')),
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(true),
-            style: destructive ? TextButton.styleFrom(foregroundColor: cs.error) : null,
-            child: const Text('Sim'),
-          ),
-        ],
-      ),
-    );
-    return fallback == true;
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    final minH = const Size.fromHeight(44);
-    final deleteStyle = OutlinedButton.styleFrom(foregroundColor: cs.error, side: BorderSide(color: cs.error), minimumSize: minH);
-    final outlinedStyle = OutlinedButton.styleFrom(minimumSize: minH);
-    final filledStyle = FilledButton.styleFrom(minimumSize: minH);
-
-    return SafeArea(
-      child: Padding(
-        padding: EdgeInsets.only(left: 16, right: 16, bottom: MediaQuery.of(context).viewInsets.bottom + 16, top: 8),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(height: 4, width: 38, margin: const EdgeInsets.only(bottom: 8), decoration: BoxDecoration(color: Theme.of(context).dividerColor, borderRadius: BorderRadius.circular(2))),
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    m.name,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                _CountdownBadge(nextWhen: vm.nextFireTime(m)),
-              ],
-            ),
-            const SizedBox(height: 16),
-            GridView.count(
-              crossAxisCount: 2,
-              mainAxisSpacing: 10,
-              crossAxisSpacing: 10,
-              childAspectRatio: 3.2,
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              children: [
-                FilledButton.icon(
-                  onPressed: m.id == null
-                      ? null
-                      : () async {
-                    final ok = await _confirm(context, title: 'Confirmar', message: 'Marcar a dose de "${m.name}" como tomada agora?');
-                    if (!ok) return;
-                    await vm.markTaken(m.id!);
-                    if (context.mounted) Navigator.of(context).maybePop();
-                  },
-                  icon: const Icon(Icons.check_circle_rounded),
-                  label: const Text('Tomei agora'),
-                  style: filledStyle,
-                ),
-                OutlinedButton.icon(
-                  onPressed: m.id == null
-                      ? null
-                      : () async {
-                    final ok = await _confirm(context, title: 'Confirmar', message: 'Pular a próxima dose de "${m.name}"?');
-                    if (!ok) return;
-                    await vm.skipNext(m.id!);
-                    if (context.mounted) Navigator.of(context).maybePop();
-                  },
-                  icon: const Icon(Icons.fast_forward_rounded),
-                  label: const Text('Pular'),
-                  style: outlinedStyle,
-                ),
-                OutlinedButton.icon(
-                  onPressed: m.id == null
-                      ? null
-                      : () async {
-                    final d = await showModalBottomSheet<Duration>(
-                      context: context,
-                      showDragHandle: true,
-                      builder: (ctx) => const _PostponeSheet(),
-                    );
-                    if (d == null) return;
-                    final when = await vm.postponeAlarm(m.id!, d);
-                    if (when == null) return;
-                    String two(int n) => n.toString().padLeft(2, '0');
-                    if (context.mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Adiado para ${two(when.hour)}:${two(when.minute)}')));
-                      Navigator.of(context).maybePop();
-                    }
-                  },
-                  icon: const Icon(Icons.schedule_send_rounded),
-                  label: const Text('Adiar'),
-                  style: outlinedStyle,
-                ),
-                OutlinedButton.icon(
-                  onPressed: () async {
-                    final r = await Get.to(() => EditMedPage(existing: m));
-                    if (r == true) {
-                      await vm.init();
-                    } else if (r is Map && r['refresh'] == true) {
-                      if (r['ensureEnabledId'] is int && r['shouldBeEnabled'] == true) {
-                        await vm.toggleEnabled(r['ensureEnabledId'] as int, true);
-                      }
-                      await vm.init();
-                    }
-                    if (context.mounted) Navigator.of(context).maybePop();
-                  },
-                  icon: const Icon(Icons.edit_rounded),
-                  label: const Text('Editar'),
-                  style: outlinedStyle,
-                ),
-                OutlinedButton.icon(
-                  onPressed: m.id == null
-                      ? null
-                      : () async {
-                    await vm.toggleEnabled(m.id!, !m.enabled);
-                    if (context.mounted) Navigator.of(context).maybePop();
-                  },
-                  icon: Icon(m.enabled ? Icons.notifications_active_rounded : Icons.notifications_off_rounded),
-                  label: Text(m.enabled ? 'ON' : 'OFF'),
-                  style: outlinedStyle,
-                ),
-                OutlinedButton.icon(
-                  onPressed: m.id == null
-                      ? null
-                      : () async {
-                    final ok = await _confirm(context, title: 'Excluir', message: 'Tem certeza que deseja excluir "${m.name}"? Esta ação não pode ser desfeita.', destructive: true);
-                    if (!ok) return;
-                    await vm.remove(m.id!);
-                    if (context.mounted) Navigator.of(context).maybePop();
-                  },
-                  icon: const Icon(Icons.delete_forever_rounded),
-                  label: const Text('Excluir'),
-                  style: deleteStyle,
-                ),
-              ],
-            ),
-            const SizedBox(height: 10),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _CountdownBadge extends StatefulWidget {
-  final DateTime nextWhen;
-  const _CountdownBadge({required this.nextWhen});
-
-  @override
-  State<_CountdownBadge> createState() => _CountdownBadgeState();
-}
-
-class _CountdownBadgeState extends State<_CountdownBadge> {
-  final Stream<DateTime> _tick =
-  Stream.periodic(const Duration(seconds: 1), (_) => DateTime.now()).asBroadcastStream();
-
-  String _fmt(Duration diff) {
-    String two(int n) => n.toString().padLeft(2, '0');
-    if (diff.isNegative) return '0d 0h 00m';
-    final totalMinutes = ((diff.inSeconds + 59) ~/ 60);
-    final d = totalMinutes ~/ (24 * 60);
-    final h = (totalMinutes % (24 * 60)) ~/ 60;
-    final m = totalMinutes % 60;
-    return '${d}d ${h}h ${two(m)}m';
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-      decoration: BoxDecoration(
-        gradient: LinearGradient(colors: [cs.primaryContainer, cs.secondaryContainer], begin: Alignment.topLeft, end: Alignment.bottomRight),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: cs.primary.withOpacity(0.25)),
-      ),
-      child: StreamBuilder<DateTime>(
-        stream: _tick,
-        initialData: DateTime.now(),
-        builder: (context, snap) {
-          final now = snap.data ?? DateTime.now();
-          final cd = _fmt(widget.nextWhen.difference(now));
-          return Row(
+      showDragHandle: true,
+      builder: (context) {
+        final theme = Theme.of(context);
+        final filledStyle = FilledButton.styleFrom(minimumSize: const Size.fromHeight(46));
+        final outlinedStyle = OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(46));
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(16, 6, 16, 20),
+          child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(Icons.timer_rounded, size: 18, color: cs.onSecondaryContainer),
-              const SizedBox(width: 6),
               Text(
-                cd,
-                overflow: TextOverflow.fade,
-                softWrap: false,
-                style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                  fontFeatures: const [FontFeature.tabularFigures()],
-                  fontWeight: FontWeight.w800,
-                  color: cs.onSecondaryContainer,
+                m.name,
+                style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800),
+              ),
+              const SizedBox(height: 10),
+              ListView(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                children: [
+                  FilledButton.icon(
+                    onPressed: m.id == null
+                        ? null
+                        : () async {
+                      final ok = await _confirm(
+                        context,
+                        title: 'Confirmar',
+                        message: 'Marcar a dose de "${m.name}" como tomada agora?',
+                      );
+                      if (!ok) return;
+                      await vm.markTaken(m.id!);
+                      _statusCache.clear();
+                      await _refresh();
+                      if (context.mounted) Navigator.of(context).maybePop();
+                    },
+                    icon: const Icon(Icons.check_circle_rounded),
+                    label: const Text('Tomei agora'),
+                    style: filledStyle,
+                  ),
+                  const SizedBox(height: 10),
+                  OutlinedButton.icon(
+                    onPressed: m.id == null
+                        ? null
+                        : () async {
+                      final ok = await _confirm(
+                        context,
+                        title: 'Confirmar',
+                        message: 'Marcar a dose de "${m.name}" como esquecida?',
+                      );
+                      if (!ok) return;
+                      await vm.markMissed(m.id!);
+                      _statusCache.clear();
+                      await _refresh();
+                      if (context.mounted) Navigator.of(context).maybePop();
+                    },
+                    icon: const Icon(Icons.report_gmailerrorred_rounded),
+                    label: const Text('Esqueci'),
+                    style: outlinedStyle,
+                  ),
+                  const SizedBox(height: 10),
+                  OutlinedButton.icon(
+                    onPressed: m.id == null
+                        ? null
+                        : () async {
+                      final ok = await _confirm(
+                        context,
+                        title: 'Confirmar',
+                        message: 'Pular a próxima dose de "${m.name}"?',
+                      );
+                      if (!ok) return;
+                      await vm.skipNext(m.id!);
+                      _statusCache.clear();
+                      await _refresh();
+                      if (context.mounted) Navigator.of(context).maybePop();
+                    },
+                    icon: const Icon(Icons.fast_forward_rounded),
+                    label: const Text('Pular'),
+                    style: outlinedStyle,
+                  ),
+                  const SizedBox(height: 10),
+                  OutlinedButton.icon(
+                    onPressed: () async {
+                      await _openEdit(m);
+                      if (context.mounted) Navigator.of(context).maybePop();
+                    },
+                    icon: const Icon(Icons.edit_rounded),
+                    label: const Text('Editar'),
+                    style: outlinedStyle,
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _DoseSlot {
+  final Medication med;
+  final DateTime scheduledAt;
+  const _DoseSlot({required this.med, required this.scheduledAt});
+}
+
+class _DateStrip extends StatelessWidget {
+  final DateTime selected;
+  final void Function(DateTime) onSelect;
+  final DateTime Function(DateTime) dateOnly;
+
+  const _DateStrip({
+    required this.selected,
+    required this.onSelect,
+    required this.dateOnly,
+  });
+
+  String _dayLabel(DateTime d) {
+    const w = ['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb', 'Dom'];
+    final wd = w[(d.weekday - 1) % 7];
+    final dd = d.day.toString().padLeft(2, '0');
+    final mm = d.month.toString().padLeft(2, '0');
+    return '$wd $dd/$mm';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final now = dateOnly(DateTime.now());
+    final days = List.generate(14, (i) => now.add(Duration(days: i - 6)));
+    return SizedBox(
+      height: 54,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        itemCount: days.length,
+        separatorBuilder: (_, __) => const SizedBox(width: 8),
+        itemBuilder: (_, i) {
+          final d = days[i];
+          final isSel = d.year == selected.year && d.month == selected.month && d.day == selected.day;
+          return InkWell(
+            borderRadius: BorderRadius.circular(16),
+            onTap: () => onSelect(d),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 180),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(16),
+                color: isSel
+                    ? Theme.of(context).colorScheme.primaryContainer
+                    : Theme.of(context).colorScheme.surfaceVariant,
+              ),
+              child: Center(
+                child: Text(
+                  _dayLabel(d),
+                  style: TextStyle(
+                    fontWeight: isSel ? FontWeight.w800 : FontWeight.w600,
+                  ),
                 ),
               ),
-            ],
+            ),
           );
         },
       ),
-    );
-  }
-}
-
-class _PostponeSheet extends StatelessWidget {
-  const _PostponeSheet();
-
-  @override
-  Widget build(BuildContext context) {
-    return SafeArea(
-      minimum: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: const [
-          SizedBox(height: 6),
-          _SheetTitle(),
-          SizedBox(height: 12),
-          _DelayChips(),
-          SizedBox(height: 12),
-        ],
-      ),
-    );
-  }
-}
-
-class _SheetTitle extends StatelessWidget {
-  const _SheetTitle();
-  @override
-  Widget build(BuildContext context) {
-    return Text('Adiar lembrete', style: Theme.of(context).textTheme.titleMedium);
-  }
-}
-
-class _DelayChips extends StatelessWidget {
-  const _DelayChips();
-  @override
-  Widget build(BuildContext context) {
-    return Wrap(
-      spacing: 10,
-      runSpacing: 10,
-      children: const [
-        _DelayChip(label: '+1 min', duration: Duration(minutes: 1)),
-        _DelayChip(label: '+5 min', duration: Duration(minutes: 5)),
-        _DelayChip(label: '+10 min', duration: Duration(minutes: 10)),
-        _DelayChip(label: '+30 min', duration: Duration(minutes: 30)),
-        _DelayChip(label: '+60 min', duration: Duration(minutes: 60)),
-      ],
-    );
-  }
-}
-
-class _DelayChip extends StatelessWidget {
-  final String label;
-  final Duration duration;
-  const _DelayChip({required this.label, required this.duration});
-
-  @override
-  Widget build(BuildContext context) {
-    return ActionChip(
-      label: Text(label),
-      avatar: const Icon(Icons.schedule, size: 18),
-      onPressed: () => Navigator.of(context).pop(duration),
     );
   }
 }

@@ -6,6 +6,7 @@ class AppSettingsController extends GetxController {
   final Rx<ThemeMode> themeMode = ThemeMode.system.obs;
 
   Future<void> init() async {
+    await SettingsService.init();
     themeMode.value = await SettingsService.getThemeMode();
   }
 
